@@ -1,0 +1,53 @@
+// example.capa
+//
+// A self-contained tour of the toolkit: mint a token, verify it, inspect
+// its claims, and watch a tampered token get rejected. The only
+// capabilities here are the example's own: Stdio to print, plus the
+// Random + Clock that mint_token needs. The verify and inspect paths hold
+// NOTHING; the example passes `now` in from its own side.
+//
+// Run from the repository root:
+//
+//     capa install                     # vendor capa_jwt + capa_uuid + capa_base64
+//     capa --run example.capa
+//     capa --wasm --run example.capa   # byte-identical output
+
+import authgate
+
+fun main(stdio: Stdio, rand: Random, clock: Clock)
+    // A demo HMAC key as raw bytes. In the CLI this arrives base64-encoded;
+    // here we use the bytes of a String directly.
+    let key = "your-256-bit-secret".bytes()
+
+    // 1. MINT (holds exactly {Random, Clock}): a token for `alice` with a
+    //    one-hour lifetime and a `read write` scope. jti is a v7 UUID.
+    let token = mint_token(rand, clock, key, "alice", "read write", 3600)
+    stdio.println("== capa_authgate example ==")
+    stdio.println("token:   ${token}")
+
+    // 2. VERIFY (PURE): the example holds the Clock and passes `now` in,
+    //    so verify_token itself needs no authority at all.
+    let now = to_int(clock.now_secs())
+    match verify_token(token, key, now)
+        Ok(claims) ->
+            stdio.println("verify:  ok")
+            stdio.println("claims:  ${claims}")
+        Err(e) ->
+            stdio.println("verify:  rejected (${auth_error_message(e)})")
+
+    // 3. INSPECT (PURE): decode the claims WITHOUT verifying, for audit.
+    match inspect_token(token)
+        Ok(claims) -> stdio.println("inspect: ${claims}")
+        Err(e)     -> stdio.println("inspect: ${auth_error_message(e)}")
+
+    // 4. TAMPER: flip the last character of the signature. The recomputed
+    //    HMAC no longer matches, so the pure verifier rejects it.
+    let n = token.length()
+    let last = match token.char_at(n - 1)
+        Some(c) -> c
+        None    -> ""
+    let flipped = if last == "c" then "d" else "c"
+    let tampered = "${token.substring(0, n - 1)}${flipped}"
+    match verify_token(tampered, key, now)
+        Ok(_)  -> stdio.println("tamper:  ACCEPTED A TAMPERED TOKEN (bug)")
+        Err(e) -> stdio.println("tamper:  rejected tampered token (${auth_error_message(e)})")

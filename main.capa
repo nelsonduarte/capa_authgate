@@ -1,0 +1,128 @@
+// main.capa
+//
+// The CLI shell for the auth-token toolkit. This is the ONLY function
+// that holds I/O: it reads argv (Env), prints results (Stdio), and hands
+// the two authority-bearing capabilities (Random, Clock) down to
+// mint_token. The verify and inspect paths it dispatches to are PURE.
+//
+// CAPABILITY DISCIPLINE (the deliverable). `capa --manifest main.capa`
+// prints the per-function surface:
+//
+//   * verify_token   {}                       (pure - proven inert)
+//   * inspect_token  {}                       (pure - proven inert)
+//   * mint_token     {Random, Clock}          (exactly, nothing more)
+//   * main           {Env, Stdio, Random, Clock}   (the union)
+//
+// main draws the exact union of what it delegates: Env + Stdio for the
+// CLI itself, and Random + Clock which it only passes through to
+// mint_token. It never acquires Fs, Net, Db, Proc, or Unsafe, so "this
+// tool cannot read a file, open a socket, or spawn a process" is a
+// machine-checked fact, not a promise.
+//
+// KEYS. An HMAC key is supplied as a standard-base64 argument (keys are
+// raw bytes, not text), decoded with capa_base64.decode. For `verify`,
+// main reads `now = clock.now_secs()` once and passes it into the pure
+// verify_token, which is what keeps verification capability-free.
+//
+// Usage:
+//   authgate mint    <key_b64> <subject> <scopes> <ttl_secs>
+//   authgate verify  <key_b64> <token>
+//   authgate inspect <token>
+
+import authgate
+import capa_base64.base64
+
+// The base64-decoded HMAC key, or an `AuthError::BadKey` naming why the
+// argument was not valid standard base64. Keys are bytes, so they are
+// carried on the command line base64-encoded.
+fun decode_key(key_b64: String) -> Result<List<Int>, AuthError>
+    return match decode(key_b64)
+        Ok(bytes) -> Ok(bytes)
+        Err(e)    -> Err(BadKey(base64_error_message(e)))
+
+// argv[i] as an Option, so out-of-range access is a clean error rather
+// than an out-of-bounds panic.
+fun arg_at(argv: List<String>, i: Int) -> Option<String>
+    if i < 0 or i >= argv.length()
+        return None
+    return Some(argv[i])
+
+fun usage(stdio: Stdio)
+    stdio.println("capa_authgate - a stateless HS256 auth-token toolkit")
+    stdio.println("")
+    stdio.println("usage:")
+    stdio.println("  authgate mint    <key_b64> <subject> <scopes> <ttl_secs>")
+    stdio.println("  authgate verify  <key_b64> <token>")
+    stdio.println("  authgate inspect <token>")
+    stdio.println("")
+    stdio.println("keys are raw HMAC bytes supplied as standard base64.")
+
+fun cmd_mint(stdio: Stdio, rand: Random, clock: Clock, argv: List<String>)
+    let key_b64 = match arg_at(argv, 1)
+        Some(s) -> s
+        None    -> return usage(stdio)
+    let subject = match arg_at(argv, 2)
+        Some(s) -> s
+        None    -> return usage(stdio)
+    let scopes = match arg_at(argv, 3)
+        Some(s) -> s
+        None    -> return usage(stdio)
+    let ttl = match arg_at(argv, 4)
+        Some(s) -> match parse_int(s)
+            Some(n) -> n
+            None    -> return stdio.eprintln("authgate: ttl_secs must be an integer, got '${s}'")
+        None    -> return usage(stdio)
+
+    let key = match decode_key(key_b64)
+        Ok(k)  -> k
+        Err(e) -> return stdio.eprintln("authgate: ${auth_error_message(e)}")
+
+    // The one authority-bearing call: mint holds exactly {Random, Clock}.
+    stdio.println(mint_token(rand, clock, key, subject, scopes, ttl))
+
+fun cmd_verify(stdio: Stdio, clock: Clock, argv: List<String>)
+    let key_b64 = match arg_at(argv, 1)
+        Some(s) -> s
+        None    -> return usage(stdio)
+    let token = match arg_at(argv, 2)
+        Some(s) -> s
+        None    -> return usage(stdio)
+
+    let key = match decode_key(key_b64)
+        Ok(k)  -> k
+        Err(e) -> return stdio.eprintln("authgate: ${auth_error_message(e)}")
+
+    // The caller holds the Clock and reads `now` HERE; verify_token itself
+    // is pure and takes `now_secs` as a plain Int. That split is the point.
+    let now = to_int(clock.now_secs())
+    match verify_token(token, key, now)
+        Ok(claims) ->
+            stdio.println("verify:  ok")
+            stdio.println("claims:  ${claims}")
+        Err(e) ->
+            stdio.println("verify:  rejected (${auth_error_message(e)})")
+
+fun cmd_inspect(stdio: Stdio, argv: List<String>)
+    let token = match arg_at(argv, 1)
+        Some(s) -> s
+        None    -> return usage(stdio)
+    // Pure: no signature check, UNTRUSTED claims, for debug / audit only.
+    match inspect_token(token)
+        Ok(claims) ->
+            stdio.println("claims (UNVERIFIED):  ${claims}")
+        Err(e) ->
+            stdio.println("inspect: ${auth_error_message(e)}")
+
+pub fun main(stdio: Stdio, env: Env, rand: Random, clock: Clock)
+    let argv = env.args()
+    let cmd = match arg_at(argv, 0)
+        Some(s) -> s
+        None    -> return usage(stdio)
+    if cmd == "mint"
+        cmd_mint(stdio, rand, clock, argv)
+    elif cmd == "verify"
+        cmd_verify(stdio, clock, argv)
+    elif cmd == "inspect"
+        cmd_inspect(stdio, argv)
+    else
+        usage(stdio)

@@ -1,0 +1,35 @@
+// tests/support.capa
+//
+// Small renderers shared by the suite. A verify result is reduced to a
+// stable `String` so the exact outcome (the payload, or the error KIND)
+// can be pinned with `eq_str`, identically on both backends.
+
+import authgate
+
+/// A short, stable tag for an `AuthError` variant, ignoring its message,
+/// so a test can assert the exact error KIND without depending on the
+/// human-readable wording.
+pub fun error_tag(e: AuthError) -> String
+    return match e
+        BadSignature   -> "BadSignature"
+        UnsupportedAlg(_) -> "UnsupportedAlg"
+        Expired        -> "Expired"
+        Malformed(_)   -> "Malformed"
+        BadClaim(_)    -> "BadClaim"
+        BadKey(_)      -> "BadKey"
+
+/// Render a `verify_token` / `inspect_token` result: the payload JSON on
+/// `Ok`, or the error tag prefixed with `err:` on `Err`. Payloads are
+/// JSON objects (they start with `{`), so they never collide with `err:`.
+pub fun auth_outcome(r: Result<String, AuthError>) -> String
+    return match r
+        Ok(payload) -> payload
+        Err(e)      -> "err:${error_tag(e)}"
+
+/// Reduce a result to just `ok` / `err:<tag>`, dropping the payload. Used
+/// for the live mint round-trip, whose payload carries a wall-clock time
+/// and a random jti and so is not byte-stable across the two backends.
+pub fun auth_status(r: Result<String, AuthError>) -> String
+    return match r
+        Ok(_)  -> "ok"
+        Err(e) -> "err:${error_tag(e)}"

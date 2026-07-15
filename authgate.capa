@@ -1,0 +1,171 @@
+// authgate.capa
+//
+// The reusable auth-token logic, kept to the MINIMAL capability surface.
+// This module is where the capability discipline shows: the two read
+// paths are PURE and the mint path holds exactly {Random, Clock}.
+//
+//   * verify_token   needs NOTHING (pure) - the caller passes `now_secs`
+//                    in, so the verifier never reads the clock and holds
+//                    no authority at all. It provably cannot read a file,
+//                    open a socket, or spawn a process.
+//   * inspect_token  needs NOTHING (pure) - a base64url decode of the
+//                    payload for debug / audit, no signature check.
+//   * mint_token     needs EXACTLY {Random, Clock} - a random token id
+//                    (uuid v7) and the wall-clock issue time, nothing more.
+//
+// The type of each function IS the proof of its authority; `capa
+// --manifest main.capa` prints the per-function surface. The CLI shell in
+// main.capa is the only place that holds Env and Stdio.
+//
+// This module composes three seed libraries:
+//   * capa_jwt      - HS256 sign / verify / expiry (itself pure).
+//   * capa_uuid     - a time-ordered v7 UUID for the token id (jti).
+//   * capa_base64   - base64url-decode a payload segment for inspect.
+
+import capa_jwt.jwt
+import capa_uuid.uuid
+import capa_base64.base64
+
+// The 95 printable ASCII characters, 0x20..0x7E, indexed by
+// `code_point - 0x20`. Capa has no bytes-to-`String` primitive, so the
+// bytes of a base64url-decoded payload segment are reconstructed by
+// mapping each byte through this table (the same technique capa_jwt uses
+// internally). Compact JSON, as emitted by the common encoders, is
+// entirely in this ASCII range.
+const ASCII: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+
+/// The typed error the toolkit returns instead of panicking or guessing.
+/// `BadSignature` and `UnsupportedAlg` are the security rejections (a tag
+/// that does not match the key, and the algorithm-confusion defense);
+/// `Expired` is a well-formed, correctly-signed token past its `exp`;
+/// `Malformed` is a structurally broken token; `BadClaim` is a
+/// missing or ill-typed claim; `BadKey` is a base64 HMAC key the CLI
+/// could not decode.
+pub type AuthError =
+    BadSignature             // HS256 tag does not match the key
+    UnsupportedAlg(String)   // header `alg` was not HS256 (confusion defense)
+    Expired                  // a valid token whose `exp` is at or before now
+    Malformed(String)        // segment count, base64, JSON, or encoding
+    BadClaim(String)         // a claim is absent or the wrong type
+    BadKey(String)           // the supplied base64 key would not decode
+
+/// A human-readable message for an `AuthError`.
+pub fun auth_error_message(e: AuthError) -> String
+    return match e
+        BadSignature      -> "invalid signature"
+        UnsupportedAlg(a) -> "unsupported algorithm: ${a}"
+        Expired           -> "token has expired"
+        Malformed(m)      -> "malformed token: ${m}"
+        BadClaim(m)       -> "invalid claim: ${m}"
+        BadKey(m)         -> "bad key: ${m}"
+
+/// Fold a `capa_jwt.JwtError` into this toolkit's `AuthError`, so callers
+/// see one error vocabulary regardless of which composed library raised it.
+fun from_jwt(e: JwtError) -> AuthError
+    return match e
+        InvalidSignature        -> BadSignature
+        UnsupportedAlgorithm(a) -> UnsupportedAlg(a)
+        MalformedToken(m)       -> Malformed(m)
+        InvalidClaim(m)         -> BadClaim(m)
+
+// ---------------------------------------------------------------
+// JSON helpers (pure).
+
+/// Escape a String for embedding inside a JSON string literal: the two
+/// characters JSON requires escaped in the common case, `\` and `"`. The
+/// claim values here (a subject and a scope list) are short identifiers,
+/// so this minimal escaping keeps the emitted claims valid JSON.
+fun json_escape(s: String) -> String
+    var out = ""
+    var i = 0
+    let n = s.length()
+    while i < n
+        let ch = match s.char_at(i)
+            Some(c) -> c
+            None    -> ""
+        if ch == "\\"
+            out = "${out}\\\\"
+        elif ch == "\""
+            out = "${out}\\\""
+        else
+            out = "${out}${ch}"
+        i = i + 1
+    return out
+
+/// Reconstruct ASCII-JSON text from the bytes of a decoded payload
+/// segment, or `None` if any byte is outside printable ASCII (plus tab,
+/// newline, carriage return). Pure; mirrors capa_jwt's internal decoder.
+fun ascii_from_bytes(bytes: List<Int>) -> Option<String>
+    var out = ""
+    for b in bytes
+        let v = b & 0xFF
+        if v == 0x09
+            out = "${out}\t"
+        elif v == 0x0A
+            out = "${out}\n"
+        elif v == 0x0D
+            out = "${out}\r"
+        elif v >= 0x20 and v <= 0x7E
+            match ASCII.char_at(v - 0x20)
+                Some(c) -> out = "${out}${c}"
+                None    -> return None
+        else
+            return None
+    return Some(out)
+
+// ---------------------------------------------------------------
+// Public surface.
+
+/// Verify an HS256 token under `key` and return its payload JSON on
+/// success. PURE: it declares ZERO capabilities and `capa --manifest`
+/// proves it. The signature and algorithm-confusion checks are delegated
+/// to `capa_jwt.verify_hs256` (constant-time tag compare, `alg:"HS256"`
+/// required before any signature is trusted); a verified token is then
+/// checked against `now_secs` via `capa_jwt.is_expired` and rejected with
+/// `Expired` when `exp <= now_secs`.
+///
+/// `now_secs` is passed IN by the caller (who holds the `Clock`); that is
+/// exactly what keeps this function pure. A verifier that reads the clock
+/// itself would need `Clock`; this one provably holds no authority at all.
+pub fun verify_token(token: String, key: List<Int>, now_secs: Int) -> Result<String, AuthError>
+    let payload = match verify_hs256(token, key)
+        Ok(p)  -> p
+        Err(e) -> return Err(from_jwt(e))
+    return match is_expired(payload, now_secs)
+        Err(e)       -> Err(from_jwt(e))
+        Ok(expired)  -> if expired then Err(Expired) else Ok(payload)
+
+/// Mint a fresh HS256 token. Declares EXACTLY {Random, Clock}: it draws a
+/// random, time-ordered token id (`jti`, a v7 UUID) and reads the wall
+/// clock once for the issue time. It holds no other authority; `capa
+/// --manifest` proves the surface is exactly {Random, Clock}.
+///
+/// The claims are compact JSON, in a fixed key order:
+/// `{"sub":...,"scopes":...,"iat":now,"exp":now+ttl,"jti":...}`. `subject`
+/// and `scopes` are JSON-escaped. The token is signed with
+/// `capa_jwt.sign_hs256` (pure), so mint's whole capability footprint is
+/// the id draw plus the clock read.
+pub fun mint_token(rand: Random, clock: Clock, key: List<Int>, subject: String, scopes: String, ttl_secs: Int) -> String
+    let jti = uuid_v7(rand, clock)
+    let now = to_int(clock.now_secs())
+    let exp = now + ttl_secs
+    let sub_j = json_escape(subject)
+    let scopes_j = json_escape(scopes)
+    let claims = "{\"sub\":\"${sub_j}\",\"scopes\":\"${scopes_j}\",\"iat\":${now},\"exp\":${exp},\"jti\":\"${jti}\"}"
+    return sign_hs256(claims, key)
+
+/// Decode a token's payload segment and return its claims JSON WITHOUT
+/// verifying the signature: a debug / audit helper. PURE, zero
+/// capabilities. Because it does no signature check, the returned claims
+/// are UNTRUSTED; use `verify_token` before trusting anything. The payload
+/// is the second of the three `.`-separated segments, base64url-decoded
+/// (no padding, the JWT convention) and reconstructed as ASCII JSON text.
+pub fun inspect_token(token: String) -> Result<String, AuthError>
+    let parts = token.split(".")
+    if parts.length() < 2
+        return Err(Malformed("expected at least two '.'-separated segments, got ${parts.length()}"))
+    return match decode_url(parts[1])
+        Err(e)     -> Err(Malformed("payload is not valid base64url: ${base64_error_message(e)}"))
+        Ok(bytes)  -> match ascii_from_bytes(bytes)
+            None       -> Err(Malformed("payload is not ASCII JSON text"))
+            Some(text) -> Ok(text)

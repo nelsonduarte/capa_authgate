@@ -1,0 +1,52 @@
+# capa_authgate - package manifest.
+#
+# A stateless auth-token toolkit (mint, verify, inspect an HS256 JWT) and
+# a small CLI over it. It is an APPLICATION, not a library, and its whole
+# point is two things:
+#
+#   1. It COMPOSES three seed libraries end to end: capa_jwt (HS256 sign /
+#      verify / expiry), capa_uuid (a v7 UUID for the token id), and
+#      capa_base64 (base64url-decode a token payload; base64-decode the
+#      supplied key). Each is a real git dependency, pinned by tag and the
+#      publisher verify_key, so `capa install` runs the full supply-chain
+#      check on all three.
+#
+#   2. It PROVES Capa's per-operation capability discipline. The token
+#      VERIFY path (`verify_token`) and the audit INSPECT path
+#      (`inspect_token`) are PURE: they declare ZERO capabilities, so the
+#      compiler proves a token check cannot read a file, open a socket,
+#      or read the clock. Only MINT (`mint_token`) declares authority, and
+#      it declares EXACTLY {Random, Clock} (a random token id + the issue
+#      time), nothing more. `capa --manifest main.capa` proves the
+#      per-function surface; leaky_verify.capa shows the compiler rejecting
+#      a verify path that tries to exfiltrate the token without authority.
+#
+# The verifier is pure because the caller holds the Clock and passes `now`
+# in: that single design choice (inherited from capa_jwt) is what keeps
+# the verify path provably inert. main is the only function that holds
+# I/O, and its surface is exactly the union {Env, Stdio, Random, Clock}.
+
+[package]
+name = "capa_authgate"
+version = "0.1.0"
+capa = ">=1.15.1"
+
+[dependencies.capa_jwt]
+git = "https://github.com/nelsonduarte/capa_jwt"
+tag = "v0.1.0"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[dependencies.capa_uuid]
+git = "https://github.com/nelsonduarte/capa_uuid"
+tag = "v0.1.0"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[dependencies.capa_base64]
+git = "https://github.com/nelsonduarte/capa_base64"
+tag = "v0.1.0"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[dev-dependencies.capa_test]
+git = "https://github.com/nelsonduarte/capa_test"
+tag = "v0.1.0"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"

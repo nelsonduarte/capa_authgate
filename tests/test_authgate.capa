@@ -1,0 +1,128 @@
+// tests/test_authgate.capa
+//
+// The toolkit's behaviour on both backends. The exact-outcome cases use
+// the PURE `capa_jwt.sign_hs256` to build fixed tokens (no clock, no
+// randomness), so their bytes are deterministic and identical on Python
+// and Wasm. The live `mint_token` round-trip asserts only structural
+// properties (it verifies, and its jti is a valid UUID), because a minted
+// token carries a wall-clock `iat`/`exp` and a random `jti`.
+
+import capa_test.testing
+import capa_jwt.jwt
+import capa_uuid.uuid
+import authgate
+import support
+
+fun demo_key() -> List<Int>
+    return "your-256-bit-secret".bytes()
+
+// Pull the "jti" claim out of a claims JSON object, or "" if absent.
+fun jti_of(claims: String) -> String
+    return match parse_json(claims)
+        Err(_) -> ""
+        Ok(j)  -> match j.as_object()
+            None      -> ""
+            Some(obj) -> match obj.get("jti")
+                None     -> ""
+                Some(jv) -> match jv.as_string()
+                    Some(s) -> s
+                    None    -> ""
+
+fun main(stdio: Stdio, rand: Random, clock: Clock)
+    let t = tester()
+    let key = demo_key()
+
+    // --- verify_token: exact outcomes over fixed, pre-signed tokens ---
+
+    // A well-formed token whose exp is in the future verifies and returns
+    // its payload verbatim. now = 1_600_000_000 < exp = 2_000_000_000.
+    let good_payload = "{\"sub\":\"bob\",\"scopes\":\"read\",\"exp\":2000000000}"
+    let good = sign_hs256(good_payload, key)
+    t.eq_str(stdio, "verify_ok",
+        support.auth_outcome(verify_token(good, key, 1600000000)), good_payload)
+
+    // The SAME token, verified with a `now` past its exp, is Expired. This
+    // is the caller-supplied-now showcase: expiry is decided by the `now`
+    // passed in, not by any clock the verifier holds.
+    t.eq_str(stdio, "verify_expired_by_now",
+        support.auth_outcome(verify_token(good, key, 2000000001)), "err:Expired")
+
+    // exp exactly at now counts as expired (exp <= now).
+    t.eq_str(stdio, "verify_expired_at_boundary",
+        support.auth_outcome(verify_token(good, key, 2000000000)), "err:Expired")
+
+    // A token whose exp is strictly in the past.
+    let past = sign_hs256("{\"sub\":\"x\",\"exp\":1000}", key)
+    t.eq_str(stdio, "verify_expired_past",
+        support.auth_outcome(verify_token(past, key, 2000)), "err:Expired")
+
+    // A tampered signature (last char flipped) does not verify.
+    let n = good.length()
+    let last = match good.char_at(n - 1)
+        Some(c) -> c
+        None    -> ""
+    let flip = if last == "c" then "d" else "c"
+    let tampered = "${good.substring(0, n - 1)}${flip}"
+    t.eq_str(stdio, "verify_tampered",
+        support.auth_outcome(verify_token(tampered, key, 1600000000)), "err:BadSignature")
+
+    // The genuine token still verifies under the right key (guards against
+    // a compare that rejects everything).
+    t.eq_str(stdio, "verify_genuine_again",
+        support.auth_status(verify_token(good, key, 1600000000)), "ok")
+
+    // A token signed under a DIFFERENT key fails under `key`.
+    let other = sign_hs256(good_payload, "a-completely-different-key".bytes())
+    t.eq_str(stdio, "verify_wrong_key",
+        support.auth_outcome(verify_token(other, key, 1600000000)), "err:BadSignature")
+
+    // A structurally broken token (two segments).
+    t.eq_str(stdio, "verify_malformed",
+        support.auth_outcome(verify_token("a.b", key, 1600000000)), "err:Malformed")
+
+    // A valid signature over a payload with NO exp: surfaced as a bad
+    // claim, never silently treated as never-expiring.
+    let no_exp = sign_hs256("{\"sub\":\"noexp\"}", key)
+    t.eq_str(stdio, "verify_missing_exp",
+        support.auth_outcome(verify_token(no_exp, key, 1600000000)), "err:BadClaim")
+
+    // --- inspect_token: decode claims WITHOUT verifying ---
+
+    // The claims come back byte for byte, even though inspect never checks
+    // the signature.
+    t.eq_str(stdio, "inspect_claims",
+        support.auth_outcome(inspect_token(good)), good_payload)
+
+    // inspect does NOT verify: a tampered-signature token still yields its
+    // (untrusted) claims, unlike verify_token which rejects it.
+    t.eq_str(stdio, "inspect_ignores_signature",
+        support.auth_outcome(inspect_token(tampered)), good_payload)
+
+    // A token with no payload segment is malformed.
+    t.eq_str(stdio, "inspect_malformed",
+        support.auth_outcome(inspect_token("onlyonesegment")), "err:Malformed")
+
+    // --- mint_token: live {Random, Clock} round-trip ---
+
+    // A freshly minted token verifies at the current time, and its jti is
+    // a valid UUID. The token bytes vary with the clock and the RNG, so we
+    // assert only these backend-stable properties.
+    let minted = mint_token(rand, clock, key, "alice", "read write", 3600)
+    let now = to_int(clock.now_secs())
+    t.eq_str(stdio, "mint_then_verify",
+        support.auth_status(verify_token(minted, key, now)), "ok")
+
+    let minted_claims = match verify_token(minted, key, now)
+        Ok(c)  -> c
+        Err(_) -> ""
+    t.eq_bool(stdio, "mint_jti_is_valid_uuid",
+        is_valid(jti_of(minted_claims)), true)
+
+    // The subject we asked for is present in the minted claims.
+    t.contains(stdio, "mint_has_subject", minted_claims, "\"sub\":\"alice\"")
+
+    // A minted token also round-trips through inspect (unverified decode).
+    t.eq_str(stdio, "mint_inspectable",
+        support.auth_status(inspect_token(minted)), "ok")
+
+    t.finish(stdio)

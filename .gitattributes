@@ -1,0 +1,5 @@
+# Force LF in the working tree on every platform. Every tracked file is
+# text (.capa, .md, .toml, .lock, LICENSE, .asc, .yml), so a blanket
+# eol=lf keeps output byte-identical across operating systems, which is
+# what the "byte-identical on both backends" claim needs.
+* text=auto eol=lf
