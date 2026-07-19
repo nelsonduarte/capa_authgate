@@ -23,6 +23,16 @@ permissions:
   id-token: write       # Sigstore OIDC for keyless signing
   attestations: write   # publish SLSA provenance attestation
 
+env:
+  # THE PUBLISHER FINGERPRINT, ONCE. It was written out twice: as the
+  # value the tag signature is checked against, and again in the release
+  # notes as the fingerprint readers are told to trust. Two copies of one
+  # security constant is how they drift, and this pair drifts in the
+  # worst possible direction: rotate the key, update the check, forget
+  # the notes, and every release page then tells users to verify against
+  # a key the workflow itself no longer accepts.
+  PINNED_FPR: "6C1D222D491FB88031E041A536CFB426101AA24B"
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -36,7 +46,6 @@ jobs:
       - name: Verify tag is GPG-signed by the pinned publisher key
         run: |
           set -euo pipefail
-          PINNED_FPR="6C1D222D491FB88031E041A536CFB426101AA24B"
 
           # Import the publisher key shipped in the repo.
           gpg --import publisher.asc
@@ -90,8 +99,23 @@ jobs:
         with:
           files: ${{ steps.tarball.outputs.name }}
           generate_release_notes: false
+          # NOTE FOR ANYONE EDITING THE BODY BELOW. It is reused verbatim
+          # for EVERY future release, so nothing in it may assert a fact
+          # about one particular release. It said "First SLSA L2 attested
+          # release of capa_authgate", which was true exactly once: it was
+          # already false when v0.2.0 published it, and false again for
+          # v0.2.1. That is the same bug class as the tag/version drift
+          # the guard above now catches, a static string asserting
+          # something about a specific release from a place that will be
+          # reused for all of them. Write only what is true of every
+          # release, or interpolate it from the tag.
           body: |
-            First SLSA L2 attested release of `${{ github.event.repository.name }}`.
+            `${{ github.event.repository.name }}` ${{ github.ref_name }}.
+
+            Every release of this repository is published from a GPG-signed
+            tag and carries a SLSA L2 build-provenance attestation. Both
+            are verifiable below, and neither claim depends on which
+            release this is.
 
             **Tarball:** `${{ steps.tarball.outputs.name }}`
             **SHA-256:** `${{ steps.tarball.outputs.sha256 }}`
@@ -113,6 +137,6 @@ jobs:
             ```
 
             Publisher GPG fingerprint:
-            `6C1D222D491FB88031E041A536CFB426101AA24B`
+            `${{ env.PINNED_FPR }}`
 
             See `SECURITY.md` for the full provenance model.
