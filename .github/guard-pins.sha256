@@ -47,9 +47,31 @@
 # and record the new SHA on the `revision` line. Regenerating without
 # reading the diff defeats the purpose of the exercise.
 
-revision 58cf1bf8ed9612dadc277485b2c8be4ff33445ef
+revision 2db00705e05b1774cf41eb58006e6533cfca4d55
 
-a8438e63ca91f210888dc462486c6b7b6037856e3e929c6299a70efb416c2a60  .github/workflows/release-guards.yml
+# AUDIT NOTE, 2db0070 (was 58cf1bf). The diff is the job.workflow_sha
+# fix and what it exposed. Behaviourally: the empty-string context
+# property replaced by the documented one in both jobs; the hardcoded
+# guard repository replaced by job.workflow_repository, so a fork of the
+# guards no longer silently pairs with our scripts; the misnamed
+# "confirm the guards are the revision you pinned" step renamed to what
+# it actually checks, that actions/checkout honoured its ref; a new
+# optional guard-digests input verified by a new script; and GH_TOKEN on
+# the guard 2 step, which is what makes `capa install` verify SLSA
+# provenance rather than warn seven times that it could not.
+#
+# The three scripts that were already here are BYTE-IDENTICAL across the
+# bump: check_tag_version.sh, clean_room_build.sh and capa_floor.sh all
+# hash to what they hashed at 58cf1bf. That is worth stating because it
+# bounds the audit: the only new code adopted is verify_guard_digests.sh,
+# which was read in full rather than accepted on its digest.
+#
+# verify_guard_digests.sh IS in this record, because this repository now
+# passes guard-digests and therefore causes that script to run. An audit
+# record that omits a file it causes to execute is not an audit record.
+
+4bee86b2951bd33d3cb8bab6721b2abb30f0533a010dfe93d36ebb275497f1d4  .github/workflows/release-guards.yml
 420290eb75a96f49aed937be40a3d63d1e2db3aba2de4a4a87c9282eb2a13b38  tools/check_tag_version.sh
 537a7e902540efe4fe5c8f4ae72788b2f3595696b8a7a4bb0a54e19fe523ffcd  tools/clean_room_build.sh
 212b06bb4be0100267fcc98bb2be7f99f4860007f51ae222ed359cddb638eaa2  tools/capa_floor.sh
+4fa535d216ecbd647444c80e4cab978ff8e636e1d5edb437842ee561b9f17e0f  tools/verify_guard_digests.sh

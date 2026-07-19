@@ -224,6 +224,36 @@ else
   check "the self-test runs the same consumer flow as the release" \
     '[ "$(self_commands "${SELFTEST}")" = "$(self_commands "${WORKFLOW}")" ]'
 
+  # The guard digests are now written in THREE places: the audit record,
+  # and both workflows. Three copies of one security constant is how
+  # they drift, and a drifted copy still reports success, so they are
+  # tied together here rather than trusted to stay equal.
+  yaml_digests() {
+    awk '
+      /^[[:space:]]*guard-digests:[[:space:]]*\|/ { in_d = 1; next }
+      in_d && /^[[:space:]]{0,6}[a-zA-Z_-]+:/ { in_d = 0 }
+      in_d { print }
+    ' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+      | grep -E '^[0-9a-f]{64}' | sed 's/[[:space:]]\{1,\}/  /' | sort
+  }
+
+  audited_digests() {
+    grep -E '^[0-9a-f]{64}' "${REPO_ROOT}/.github/guard-pins.sha256" \
+      | sed 's/[[:space:]]\{1,\}/  /' | sort
+  }
+
+  check "the release passes guard digests at all" \
+    '[ -n "$(yaml_digests "${WORKFLOW}")" ]'
+
+  check "the self-test verifies the same guard digests as the release" \
+    '[ "$(yaml_digests "${SELFTEST}")" = "$(yaml_digests "${WORKFLOW}")" ]'
+
+  # The run-time check and the pre-flight audit must describe one set of
+  # bytes. If they diverge, one of them is verifying a revision nobody
+  # audited, and which one is anybody's guess.
+  check "the digests the release passes are the ones it audited" \
+    '[ "$(yaml_digests "${WORKFLOW}")" = "$(audited_digests)" ]'
+
   # A rehearsal that can publish is not a rehearsal. It must hold no
   # write scope at all, and above all no id-token, which is the token
   # that signs attestations.
