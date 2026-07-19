@@ -1,5 +1,11 @@
 # Force LF in the working tree on every platform. Every tracked file is
-# text (.capa, .md, .toml, .lock, LICENSE, .asc, .yml), so a blanket
-# eol=lf keeps output byte-identical across operating systems, which is
-# what the "byte-identical on both backends" claim needs.
+# text (.capa, .md, .toml, .lock, .py, LICENSE, .asc, .yml), so a
+# blanket eol=lf keeps output byte-identical across operating systems,
+# which is what the "byte-identical on both backends" claim needs.
 * text=auto eol=lf
+
+# tools/ holds developer helpers: the README manifest-table generator
+# and the vendor-nesting workaround for `--check-capabilities`. Neither
+# is part of the distributed application, so they stay out of the
+# release tarball.
+tools/ export-ignore

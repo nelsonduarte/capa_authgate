@@ -1,0 +1,196 @@
+// tests/test_service.capa
+//
+// The HTTP routes, tested WITHOUT A SOCKET.
+//
+// That is not a testing convenience, it is the capability discipline
+// paying out. `router.handle` is pure: it takes a parsed `Request` plus
+// the key and `now` as ordinary data and returns a `Response` value. So
+// a test can build a request out of bytes, call the handler, and read
+// the answer, holding no `Serve` and opening no port. Nothing is mocked
+// and nothing is stubbed, because there was no I/O to mock.
+//
+// Tokens are built with the PURE `capa_jwt.sign_hs256`, so every case
+// here is deterministic: fixed key, fixed claims, fixed `now`.
+//
+// The one thing these tests cannot cover is service.capa's accept loop,
+// which needs a real listener. That is exercised by hand against a live
+// server; see the README's client transcript.
+
+import capa_test.testing
+import capa_jwt.jwt
+import capa_server.bytes
+import capa_server.request
+import capa_server.response
+import router
+
+fun demo_key() -> List<Int>
+    return "your-256-bit-secret".bytes()
+
+// A request built from the bytes a client would actually send, parsed
+// by capa_server's own parser rather than constructed field by field,
+// so the tests exercise the real path in and not a convenient shortcut.
+fun request_of(method: String, target: String, body: String) -> Request
+    let wire = "${method} ${target} HTTP/1.1\r\nHost: authgate.test\r\nContent-Length: ${body.length()}\r\nConnection: close\r\n\r\n${body}"
+    match parse_request(wire.bytes(), default_limits())
+        Ok(r)  -> return r
+        Err(_) -> panic("test bug: the fixture request did not parse")
+    return empty_request()
+
+// Never reached: `panic` above ends the process. It exists because
+// `panic` is typed `Unit` (Capa has no bottom type), so the path after
+// it still owes the function a `Request`.
+fun empty_request() -> Request
+    return Request {
+        method: "", target: "", path: "", query: "", version: "",
+        headers: [], body: []
+    }
+
+// The response body as text, minus its trailing newline.
+//
+// The newline has to come off at the BYTE level: `ascii_string` accepts
+// only 0x20..0x7E and returns `None` on an LF, so decoding first and
+// trimming after would report every body as non-ASCII.
+fun body_text(r: Response) -> String
+    var end = r.body.length()
+    while end > 0 and r.body[end - 1] == 0x0A
+        end = end - 1
+    return match ascii_string(slice(r.body, 0, end))
+        Some(s) -> s
+        None    -> "<non-ascii body>"
+
+// Drive one request through the pure handler.
+fun call(method: String, target: String, body: String, now: Int) -> Response
+    return handle(request_of(method, target, body), demo_key(), now)
+
+fun main(stdio: Stdio)
+    let t = tester()
+
+    // A well-formed token whose exp is in the future. Fixed bytes: the
+    // claims and the key are fixed and the signer is pure.
+    let good_payload = "{\"sub\":\"bob\",\"scopes\":\"read\",\"exp\":2000000000}"
+    let good = sign_hs256(good_payload, demo_key())
+
+    // --- POST /verify ---
+
+    let ok = call("POST", "/verify", good, 1600000000)
+    t.eq_int(stdio, "verify_ok_status", ok.status, 200)
+    t.eq_str(stdio, "verify_ok_body", body_text(ok),
+        "{\"valid\":true,\"claims\":${good_payload}}")
+
+    // The SAME token past its exp. Expiry is decided by the `now` the
+    // caller passed in, never by a clock the handler holds, because the
+    // handler holds nothing.
+    let expired = call("POST", "/verify", good, 2000000001)
+    t.eq_int(stdio, "verify_expired_status", expired.status, 401)
+    t.eq_str(stdio, "verify_expired_body", body_text(expired),
+        "{\"valid\":false,\"error\":\"expired\"}")
+
+    // A tampered signature.
+    let n = good.length()
+    let last = match good.char_at(n - 1)
+        Some(c) -> c
+        None    -> ""
+    let flip = if last == "c" then "d" else "c"
+    let tampered = "${good.substring(0, n - 1)}${flip}"
+    let bad = call("POST", "/verify", tampered, 1600000000)
+    t.eq_int(stdio, "verify_tampered_status", bad.status, 401)
+    t.eq_str(stdio, "verify_tampered_body", body_text(bad),
+        "{\"valid\":false,\"error\":\"bad_signature\"}")
+
+    // A structurally broken token is the client's mistake, not a
+    // rejected credential, so it is a 400 and not a 401.
+    let broken = call("POST", "/verify", "a.b", 1600000000)
+    t.eq_int(stdio, "verify_malformed_status", broken.status, 400)
+    t.eq_str(stdio, "verify_malformed_body", body_text(broken),
+        "{\"valid\":false,\"error\":\"malformed\"}")
+
+    // An empty body is not a token.
+    t.eq_int(stdio, "verify_empty_body_status",
+        call("POST", "/verify", "", 1600000000).status, 400)
+
+    // A body with surrounding whitespace is the same token. Any shell
+    // that pipes a file, and `curl --data-binary @token.txt`, send a
+    // trailing LF; the trim runs on bytes, before the ASCII decode
+    // that would otherwise have rejected the LF outright.
+    let padded = call("POST", "/verify", "\r\n  ${good}\n", 1600000000)
+    t.eq_int(stdio, "verify_trailing_newline_status", padded.status, 200)
+    t.eq_str(stdio, "verify_trailing_newline_body", body_text(padded),
+        "{\"valid\":true,\"claims\":${good_payload}}")
+
+    // The rejection body carries a closed-set code and NEVER the
+    // token, the key, or any text taken from the request.
+    t.eq_bool(stdio, "verify_reject_does_not_echo_token",
+        body_text(bad).contains(tampered), false)
+
+    // --- POST /inspect ---
+
+    let insp = call("POST", "/inspect", good, 1600000000)
+    t.eq_int(stdio, "inspect_status", insp.status, 200)
+    t.eq_str(stdio, "inspect_body", body_text(insp),
+        "{\"verified\":false,\"claims\":${good_payload}}")
+
+    // inspect does NOT verify: a tampered token still yields its
+    // (untrusted) claims, where /verify rejected it. The response says
+    // `"verified":false` so a client cannot mistake one for the other.
+    let insp_bad = call("POST", "/inspect", tampered, 1600000000)
+    t.eq_int(stdio, "inspect_ignores_signature_status", insp_bad.status, 200)
+    t.contains(stdio, "inspect_marks_unverified", body_text(insp_bad),
+        "\"verified\":false")
+
+    t.eq_int(stdio, "inspect_malformed_status",
+        call("POST", "/inspect", "onlyonesegment", 1600000000).status, 400)
+
+    // --- routing ---
+
+    t.eq_int(stdio, "index_status", call("GET", "/", "", 0).status, 200)
+    t.eq_int(stdio, "unknown_route_status", call("GET", "/nope", "", 0).status, 404)
+
+    // A wrong method is 405 and says what it would have taken, which
+    // 405 requires.
+    let wrong = call("GET", "/verify", "", 0)
+    t.eq_int(stdio, "verify_wrong_method_status", wrong.status, 405)
+    let allow = match header_of(wrong, "Allow")
+        Some(v) -> v
+        None    -> "<absent>"
+    t.eq_str(stdio, "verify_wrong_method_allow", allow, "POST")
+
+    t.eq_int(stdio, "inspect_wrong_method_status",
+        call("GET", "/inspect", "", 0).status, 405)
+    t.eq_int(stdio, "index_wrong_method_status",
+        call("DELETE", "/", "", 0).status, 405)
+
+    // The router matches the raw, un-normalised target, so a path that
+    // only becomes "/verify" after percent-decoding is NOT a route.
+    // capa_server deliberately does not decode before routing.
+    t.eq_int(stdio, "encoded_path_is_not_a_route",
+        call("POST", "/%76erify", good, 1600000000).status, 404)
+
+    // A query string does not change the route, because the route is
+    // matched on `path` and not on `target`.
+    t.eq_int(stdio, "query_string_ignored_by_router",
+        call("POST", "/verify?x=1", good, 1600000000).status, 200)
+
+    // --- every response is renderable ---
+
+    // A Response that fails `check_response` would be replaced by a
+    // bare 500 on the wire, so a route that could produce one is a bug
+    // the client would see as a mysterious server error.
+    let all = [ok, expired, bad, broken, insp, insp_bad, wrong,
+               call("GET", "/", "", 0), call("GET", "/nope", "", 0)]
+    var renderable = true
+    for r in all
+        match check_response(r)
+            Ok(_)  -> ()
+            Err(_) -> renderable = false
+    t.eq_bool(stdio, "every_response_is_renderable", renderable, true)
+
+    t.finish(stdio)
+
+// A response header value by name, case-insensitively, since the
+// response type carries headers as a plain list of pairs.
+fun header_of(r: Response, name: String) -> Option<String>
+    for pair in r.headers
+        let (k, v) = pair
+        if k.to_lower() == name.to_lower()
+            return Some(v)
+    return None

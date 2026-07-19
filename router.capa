@@ -1,0 +1,206 @@
+// router.capa
+//
+// The HTTP surface of the auth-token toolkit, and NOTHING ELSE. Every
+// function in this file is PURE: `capa --manifest` reports `[]` for
+// all of them, `handle` included.
+//
+// THAT IS THE POINT OF THE FILE EXISTING. A request handler is the
+// piece of a service that touches attacker-supplied bytes and, on this
+// service, the piece that touches your token. Here it provably holds
+// no authority: it cannot read a file, dial a socket, spawn a process,
+// read the clock, or reach the `Serve` that is about to transmit what
+// it returns. The only thing that ever goes on the wire is the
+// `Response` value it hands back.
+//
+// The key and `now_secs` arrive as ORDINARY DATA from service.capa,
+// which is what keeps the whole path capability-free. That is the same
+// arrangement `authgate.verify_token` already required of the CLI, and
+// it is why authgate.capa needed no change at all to be served.
+//
+// Because it is pure, it is also testable without a socket: see
+// tests/test_service.capa, which drives every route through
+// `parse_request` and `handle` and never opens a port.
+//
+// NOTE ON `@public`. The bytes in a `Request` came from `Serve.recv`,
+// which the information-flow lattice labels `@public`. That is a
+// CONFIDENTIALITY statement and not an integrity one: it says only
+// "not a secret this analysis must protect". An inbound request is
+// attacker-controlled, and every path below treats it that way.
+
+import authgate
+import capa_server.bytes
+import capa_server.request
+import capa_server.response
+
+// The maximum token length accepted on a request body. A JWT is a
+// credential, not a payload; anything past this is not a token that
+// went astray, it is someone probing. capa_server's own body ceiling
+// applies first and is far larger.
+const MAX_TOKEN_BYTES: Int = 8192
+
+// ---------------------------------------------------------------
+// Wire vocabulary (pure).
+
+/// A stable, machine-readable code for an `AuthError`. The response
+/// body carries THIS and never `auth_error_message`, because three of
+/// the six variants embed text taken from the token being checked
+/// (`UnsupportedAlg` carries the `alg` header verbatim), and an
+/// attacker-controlled string has no business being reflected into a
+/// response body. The codes are a closed set of ASCII identifiers.
+fun error_code(e: AuthError) -> String
+    return match e
+        BadSignature     -> "bad_signature"
+        UnsupportedAlg(_)-> "unsupported_alg"
+        Expired          -> "expired"
+        Malformed(_)     -> "malformed"
+        BadClaim(_)      -> "bad_claim"
+        BadKey(_)        -> "server_key"
+
+/// The HTTP status for an `AuthError`. A rejected credential is 401; a
+/// token that never parsed is a 400 (the client sent nonsense, not a
+/// bad credential); a key this server could not decode is a 500,
+/// because that is the operator's mistake and not the client's.
+fun error_status_for(e: AuthError) -> Int
+    return match e
+        BadSignature      -> 401
+        UnsupportedAlg(_) -> 401
+        Expired           -> 401
+        Malformed(_)      -> 400
+        BadClaim(_)       -> 400
+        BadKey(_)         -> 500
+
+/// A JSON response with the correct content type.
+fun json_response(status: Int, body: String) -> Response
+    return bytes_response(status, "application/json", "${body}\n".bytes())
+
+/// The rejection body: a fixed shape carrying only a closed-set code.
+fun rejected(e: AuthError) -> Response
+    return json_response(error_status_for(e), "{\"valid\":false,\"error\":\"${error_code(e)}\"}")
+
+/// True for the four ASCII whitespace bytes a client is likely to put
+/// around a token: HTAB, LF, CR, and SP.
+fun is_ascii_space(b: Int) -> Bool
+    return b == 0x09 or b == 0x0A or b == 0x0D or b == 0x20
+
+/// The token carried in a request body, or `None` when the body is not
+/// printable ASCII, is empty, or is longer than a credential ever is.
+/// A JWT is base64url plus two dots, so ASCII is not a guess here.
+///
+/// The trim happens at the BYTE level, before decoding, and it has to.
+/// `capa_server.bytes.ascii_string` accepts only 0x20..0x7E and returns
+/// `None` on anything else, LF included, so trimming the decoded string
+/// would be too late: a body written by `curl --data-binary @token.txt`
+/// or by any shell that ends a line carries a trailing LF, and that
+/// whole body would have been rejected as malformed before the trim
+/// ever ran.
+fun token_from_body(r: Request) -> Option<String>
+    if r.body.length() > MAX_TOKEN_BYTES
+        return None
+
+    var start = 0
+    var end = r.body.length()
+    while start < end and is_ascii_space(r.body[start])
+        start = start + 1
+    while end > start and is_ascii_space(r.body[end - 1])
+        end = end - 1
+    if start == end
+        return None
+
+    return match ascii_string(slice(r.body, start, end))
+        None       -> None
+        Some(text) -> Some(text)
+
+// ---------------------------------------------------------------
+// The endpoints (pure).
+
+/// POST /verify - the body is the token, the response says whether it
+/// verified under this server's key at this server's `now`.
+///
+/// `key` and `now_secs` arrive as ORDINARY DATA from `main`, which is
+/// why this whole path holds no capability. The claims returned on
+/// success are the verified payload, so they are this server's own
+/// signed data rather than anything the client chose.
+///
+/// The token itself is never echoed. Beyond it being pointless, note
+/// that `Serve.send` is a PUBLIC IFC SINK on its payload: if the token
+/// or key were labelled `@secret`, sending either back would be
+/// reported by the information-flow analysis.
+fun verify_endpoint(r: Request, key: List<Int>, now_secs: Int) -> Response
+    let token = match token_from_body(r)
+        Some(t) -> t
+        None    -> return json_response(400, "{\"valid\":false,\"error\":\"malformed\"}")
+
+    return match verify_token(token, key, now_secs)
+        Ok(claims) -> json_response(200, "{\"valid\":true,\"claims\":${claims}}")
+        Err(e)     -> rejected(e)
+
+/// POST /inspect - decode the claims WITHOUT checking the signature.
+/// The claims are UNTRUSTED, which the body says in a field rather
+/// than in a comment nobody reads.
+///
+/// The decoded text is attacker-controlled, so it is re-parsed with
+/// `parse_json` before being embedded; anything that does not parse is
+/// a 400 rather than a response body an attacker got to shape.
+///
+/// This is a POST with the token in the BODY rather than a GET with it
+/// in the query string, because a token is a credential and a query
+/// string lands in access logs, proxy logs, browser history, and
+/// `Referer` headers.
+fun inspect_endpoint(r: Request) -> Response
+    let token = match token_from_body(r)
+        Some(t) -> t
+        None    -> return json_response(400, "{\"verified\":false,\"error\":\"malformed\"}")
+
+    let claims = match inspect_token(token)
+        Ok(c)  -> c
+        Err(e) -> return json_response(error_status_for(e),
+            "{\"verified\":false,\"error\":\"${error_code(e)}\"}")
+
+    return match parse_json(claims)
+        Err(_) -> json_response(400, "{\"verified\":false,\"error\":\"malformed\"}")
+        Ok(_)  -> json_response(200, "{\"verified\":false,\"claims\":${claims}}")
+
+/// GET / - what this service is and how to talk to it.
+fun index_endpoint() -> Response
+    var body = "capa_authgate service\n\n"
+    body = "${body}POST /verify   body: the token. Verifies it under the server key.\n"
+    body = "${body}POST /inspect  body: the token. Decodes claims WITHOUT verifying.\n"
+    return text_response(200, body)
+
+/// A 405 that says what it would have accepted, as 405 requires.
+fun method_not_allowed(allow: String) -> Response
+    return with_header(error_response(405, reason_phrase(405)), "Allow", allow)
+
+/// The whole router, and the whole request handler. PURE: `capa
+/// --manifest` reports `[]` for it. It cannot read a file, dial a
+/// socket, read the clock, or reach the `Serve` that is about to send
+/// what it returns; the only thing that ever goes on the wire is the
+/// `Response` value it hands back.
+///
+/// Routing is an `if` chain on the exact, un-normalised `r.path`.
+/// `capa_server` deliberately does not decode the target before
+/// routing, so a route decision and any later lookup cannot end up
+/// disagreeing about what the path was.
+///
+/// NOTE ON `@public`. The bytes in `r` came from `Serve.recv`, which
+/// the information-flow lattice labels `@public`. That is a
+/// CONFIDENTIALITY statement and not an integrity one: it says only
+/// "not a secret this analysis must protect". An inbound request is
+/// attacker-controlled, and every path below validates it as such.
+pub fun handle(r: Request, key: List<Int>, now_secs: Int) -> Response
+    if r.path == "/verify"
+        if r.method != "POST"
+            return method_not_allowed("POST")
+        return verify_endpoint(r, key, now_secs)
+
+    if r.path == "/inspect"
+        if r.method != "POST"
+            return method_not_allowed("POST")
+        return inspect_endpoint(r)
+
+    if r.path == "/"
+        if r.method != "GET" and r.method != "HEAD"
+            return method_not_allowed("GET, HEAD")
+        return index_endpoint()
+
+    return error_response(404, reason_phrase(404))

@@ -1,0 +1,215 @@
+// service.capa
+//
+// The HTTP front-end for the auth-token toolkit: a second entry point
+// alongside the CLI in main.capa, over the SAME pure verifier. This
+// file is the authority-holding shell only; the routes themselves are
+// in router.capa, which is pure.
+//
+// THE POINT. `authgate.capa` did not change by one byte to gain this
+// front-end. `verify_token(token, key, now_secs) -> Result<String,
+// AuthError>` was already the exact shape of a request handler - plain
+// data in, a `Result` out - because the purity discipline had already
+// forced the caller to hold the `Clock` and pass `now` in as an `Int`.
+// A verifier that reads its own clock would have needed rewriting to
+// be served; this one did not.
+//
+// CAPABILITY DISCIPLINE (the deliverable). `capa --manifest
+// service.capa` prints the per-function surface:
+//
+//   * verify_token   {}                  (pure - the toolkit's verifier)
+//   * inspect_token  {}                  (pure)
+//   * handle         {}                  (pure - the whole request handler)
+//   * env_or/env_int {Env}               (configuration, and only that)
+//   * main           {Serve, Env, Clock} (exactly, nothing more)
+//
+// `Serve` is INBOUND-ONLY authority. It has no method that dials out:
+// `listen`, `accept`, `recv`, and `send` back to a connection the
+// runtime handed you, and that is the whole surface. So this process
+// holds the authority to BE REACHED and nothing else, and `handle`,
+// the function that actually touches your token, holds nothing at all.
+//
+// NO Stdio, DELIBERATELY. The serving surface is exactly {Serve, Env,
+// Clock}; adding a log line would add a fourth capability to the
+// manifest, in plain sight. Startup failures therefore `panic`, whose
+// message goes to stderr without any capability, and a running server
+// is silent. That cost is the demo working as advertised: the manifest
+// is load-bearing, so it charges for output like it charges for
+// everything else.
+//
+// PYTHON BACKEND ONLY. `Serve` is not available on the Wasm backends
+// (binding a listening socket needs `wasi:sockets`), so `capa --wasm`
+// refuses this program by design. main.capa, the CLI front-end, keeps
+// the byte-identical-on-both-backends property; this file does not.
+//
+// Run it:
+//
+//     AUTHGATE_KEY=eW91ci0yNTYtYml0LXNlY3JldA== capa --run service.capa
+//
+// Configuration comes from the environment, and the `Env` is narrowed
+// to exactly these four keys before the first read:
+//
+//   AUTHGATE_KEY       required. The HMAC key, standard base64.
+//   AUTHGATE_ADDR      bind address    (default 127.0.0.1)
+//   AUTHGATE_PORT      bind port       (default 8080)
+//   AUTHGATE_REQUESTS  serve this many requests, then stop. Unset or
+//                      non-positive means "until accept fails", which
+//                      includes the capability's 30-second idle
+//                      timeout.
+
+import capa_base64.base64
+import capa_server.request
+import capa_server.response
+import capa_server.serve
+import router
+
+const DEFAULT_ADDR: String = "127.0.0.1"
+const DEFAULT_PORT: Int = 8080
+
+// ---------------------------------------------------------------
+// Configuration (holds Env, reads nothing else).
+//
+// INFORMATION FLOW. `env.get` is a SECRET SOURCE: the analyzer labels
+// everything it returns `@secret`, because a process environment
+// routinely holds credentials and this one certainly does. That label
+// is right for AUTHGATE_KEY and wrong for a bind address, so the two
+// are separated here rather than blanket-declassified. A panic message
+// below never interpolates a value read from the environment, only the
+// NAME of the variable, so nothing has to be downgraded to report a
+// configuration mistake.
+
+/// An environment variable, or `fallback` when unset or denied. The
+/// result keeps the `@secret` label `env.get` gives it; each caller
+/// decides, with a reason, whether its particular value is a secret.
+fun env_or(env: Env, name: String, fallback: String) -> String
+    return match env.get(name)
+        Some(v) -> if v.trim().is_empty() then fallback else v.trim()
+        None    -> fallback
+
+/// An integer environment variable, or `fallback`. A value that is set
+/// but not an integer is a configuration mistake and stops the server
+/// rather than being silently rounded to the default.
+///
+/// The value is declassified: an `Int` parsed out of a port or a
+/// request count is deployment configuration, and the port in
+/// particular is echoed back by `Serve`'s own denial diagnostic.
+/// AUTHGATE_KEY never comes through here.
+fun env_int(env: Env, name: String, fallback: Int) -> Int
+    let raw = match env.get(name)
+        Some(v) -> v.trim()
+        None    -> return fallback
+    if raw.is_empty()
+        return fallback
+    match parse_int(raw)
+        Some(n) ->
+            return declassify(n, reason: "a port or request count is deployment configuration, not a credential")
+        None ->
+            // The offending text is NOT quoted back: it came from the
+            // environment, so reporting it would disclose to stderr.
+            panic("authgate service: ${name} must be an integer")
+    return fallback
+
+// ---------------------------------------------------------------
+// The one function that holds authority.
+
+/// The serving entry point. Declares EXACTLY {Serve, Env, Clock}:
+///
+///   * Serve - inbound only. Nothing here can dial out, because the
+///             capability has no method that does.
+///   * Env   - the key and the bind address, narrowed to four keys.
+///   * Clock - `now_secs` per request, read HERE and passed into the
+///             pure verifier as an Int. That split is the point.
+///
+/// The accept loop is written out rather than delegated to
+/// `capa_server.serve_connections` for exactly one reason: `now` must
+/// be read per connection, and a handler built once up front would
+/// freeze a single timestamp for the life of the process. So the clock
+/// read sits in the loop, next to the connection it dates, which is
+/// the same pattern as main.capa's `cmd_verify`.
+///
+/// SEQUENTIAL, one connection at a time. `Serve` offers no threads and
+/// no async, so neither does this. See the concurrency note in the
+/// README before pointing load at it.
+pub fun main(serve: Serve, env: Env, clock: Clock)
+    // Narrow Env to the four keys this service reads, before reading
+    // any of them. A fresh Env from main can read the host's entire
+    // environment, including every other secret on the box.
+    let cfg = env.restrict_to_keys(["AUTHGATE_KEY", "AUTHGATE_ADDR", "AUTHGATE_PORT", "AUTHGATE_REQUESTS"])
+
+    let key_b64 = env_or(cfg, "AUTHGATE_KEY", "")
+    if key_b64.is_empty()
+        panic("authgate service: AUTHGATE_KEY is required (the HMAC key, standard base64)")
+    // The failure message says only that the key would not decode. The
+    // decoder's own message describes the offending bytes, and those
+    // bytes are the key.
+    var key = []
+    match decode(key_b64)
+        Ok(bytes) -> key = bytes
+        Err(_)    -> panic("authgate service: AUTHGATE_KEY is not valid standard base64")
+
+    // A bind address is not a credential: `Serve`'s own denial
+    // diagnostic prints it, and a client learns it by connecting.
+    let addr = declassify(env_or(cfg, "AUTHGATE_ADDR", DEFAULT_ADDR),
+        reason: "a bind address is deployment configuration, not a credential")
+    let port = env_int(cfg, "AUTHGATE_PORT", DEFAULT_PORT)
+    let budget = env_int(cfg, "AUTHGATE_REQUESTS", -1)
+
+    // Narrow Serve to exactly the one (address, port) this service
+    // binds, BEFORE listening: `restrict_to` returns a fresh, un-bound
+    // Serve, so the unrestricted handle main received is never the one
+    // that owns a socket.
+    //
+    // The port is named explicitly and is never 0. `Serve` checks the
+    // attenuation against the REQUESTED port, so asking for port 0
+    // would let a ":0" rule admit whatever ephemeral port the OS
+    // returned, including one the same rule would refuse by number.
+    let listener = serve.restrict_to("${addr}:${port}")
+
+    match listener.listen(addr, port)
+        Ok(_)  -> ()
+        Err(e) -> panic("authgate service: cannot listen on ${addr}:${port}: ${e.message}")
+
+    // accept -> read the clock -> serve -> close, one connection at a
+    // time, because that is what the capability offers.
+    var served = 0
+    var running = true
+    while running and (budget < 0 or served < budget)
+        match listener.accept()
+            Err(_)   -> running = false
+            Ok(conn) ->
+                // THE LOAD-BEARING LINE. main.capa:97 does the same
+                // thing for the CLI: the caller holds the Clock and
+                // reads `now` here, so verify_token stays pure and
+                // takes a plain Int.
+                let now = to_int(clock.now_secs())
+
+                // THE ONE DECLASSIFICATION THAT IS ABOUT A SECRET, and
+                // it is worth reading twice. The handler closure
+                // captures `key`, which came from `env.get` and is
+                // therefore `@secret`; `serve_once` sends, and
+                // `Serve.send` is a PUBLIC SINK on its payload. So the
+                // analyzer reports the closure, correctly and by
+                // construction, because a closure's label covers
+                // everything it captured.
+                //
+                // What makes the flow safe is a fact about `handle`
+                // and not about the closure: no path in `handle`
+                // derives any part of a `Response` from `key`. It is
+                // used only inside the pure verifier, to recompute an
+                // HMAC tag that is compared and then dropped, and the
+                // rejection bodies carry a closed set of ASCII codes
+                // (see `error_code`) rather than any message built
+                // from the token or the key.
+                //
+                // Being honest about the cost: past this line the
+                // analysis no longer guards that fact for us. If a
+                // future edit to `handle` did put the key on the wire,
+                // this declassification is what would let it through,
+                // which is exactly why it is one line, at one site,
+                // with the argument written out.
+                let handler = declassify(fun (r: Request) -> Response => handle(r, key, now),
+                    reason: "the handler captures the HMAC key, which is used only to recompute a tag inside the pure verifier; no Response is derived from it")
+                let _ = serve_once(listener, conn, default_config(), handler)
+                let _ = listener.close(conn)
+                served = served + 1
+
+    let _ = listener.stop()

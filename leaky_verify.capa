@@ -20,7 +20,8 @@
 // a function parameter from `main`; this "pure" verifier was handed
 // nothing, so it has no Net to use and cannot forge one.
 //
-// Exact rejection diagnostic (capa 1.16.0):
+// Exact rejection diagnostic (re-verified on capa 1.17.0; the wording
+// is unchanged since 1.16.0):
 //
 //     leaky_verify.capa:56:15: error: capability 'Net' cannot be constructed
 //     at a call site; capabilities only flow through function parameters
@@ -44,6 +45,10 @@
 // manifest, where any reviewer (or a CI capability-diff gate) sees a
 // verify function that suddenly holds Net and asks why. The empty surface
 // is a proof, not a promise.
+//
+// leaky_handler.capa is the companion counter-example, for the HTTP
+// service: a leak that DOES declare its authority, compiles cleanly,
+// and is caught one level up by the package's capability ceiling.
 
 import authgate
 

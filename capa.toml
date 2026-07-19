@@ -23,13 +23,53 @@
 #
 # The verifier is pure because the caller holds the Clock and passes `now`
 # in: that single design choice (inherited from capa_jwt) is what keeps
-# the verify path provably inert. main is the only function that holds
-# I/O, and its surface is exactly the union {Env, Stdio, Random, Clock}.
+# the verify path provably inert. Only the two entry points hold I/O.
+#
+# TWO FRONT-ENDS OVER ONE PURE VERIFIER. main.capa is the CLI, whose
+# surface is exactly {Env, Stdio, Random, Clock}. service.capa is an
+# HTTP front-end whose surface is exactly {Serve, Env, Clock}: `Serve` is
+# INBOUND-ONLY authority (listen / accept / recv / send back), so the
+# serving process holds the authority to BE REACHED and nothing that
+# dials out. authgate.capa did not change by one byte to gain the second
+# front-end, because `verify_token(token, key, now_secs) -> Result` was
+# already the shape of a request handler: the purity discipline had
+# forced the caller to hold the Clock and pass `now` in as an Int.
+#
+# capa_server supplies HTTP/1.1 parsing and response writing, in
+# auditable Capa source rather than in the trusted runtime, and its own
+# [capabilities] ceiling is max = ["Serve"].
+#
+# `Serve` shipped in capa 1.17.0, which is why the floor moved.
 
 [package]
 name = "capa_authgate"
 version = "0.1.0"
-capa = ">=1.15.1"
+capa = ">=1.17.0"
+
+# THE PRODUCT CEILING. A ceiling is usually reached for by a library,
+# to bound what a consumer inherits. It is worth at least as much to an
+# APPLICATION, because an application is the thing that actually gets
+# deployed: this is the machine-checked statement that no entry point,
+# and nothing anywhere in the dependency tree beneath either of them,
+# can read a file, dial out, spawn a process, or reach a database.
+#
+# The set is the exact union of the two front-ends, and no more:
+#
+#   Serve  service.capa, inbound only
+#   Env    the HMAC key and the bind configuration; argv for the CLI
+#   Clock  `now` for the verifier and `iat` for the minter
+#   Stdio  the CLI's output
+#   Random the minter's v7 UUID token id
+#
+# Absent, and therefore proven absent across the whole product: Fs,
+# Net, Db, Proc, Unsafe.
+#
+# Verify with `capa --check-capabilities service.capa`. See the README
+# for the one extra step that is needed first: the gate looks for a
+# dependency's own dependencies under `vendor/<dep>/vendor/`, and
+# `capa install` vendors flat.
+[capabilities]
+max = ["Serve", "Env", "Clock", "Stdio", "Random"]
 
 [dependencies.capa_jwt]
 git = "https://github.com/nelsonduarte/capa_jwt"
@@ -43,6 +83,43 @@ verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
 
 [dependencies.capa_base64]
 git = "https://github.com/nelsonduarte/capa_base64"
+tag = "v0.1.0"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+# HTTP/1.1 parsing and response writing for service.capa. The HTTP is
+# not hand-rolled here; it is a pinned, signed dependency like the rest.
+[dependencies.capa_server]
+git = "https://github.com/nelsonduarte/capa_server"
+tag = "v0.1.0"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+# THE TWO DEPENDENCIES-OF-DEPENDENCIES, declared here because `capa
+# install` does not resolve dependencies transitively: it reads the ROOT
+# manifest only and never opens a vendored package's capa.toml. A
+# dependency's own dependencies are therefore never fetched, and the
+# build only appears to work on a machine that happens to have a sibling
+# checkout of the missing package next to this repository, which the
+# module resolver falls back to.
+#
+# capa_hash is capa_jwt's (HMAC-SHA256 plus the constant-time tag
+# compare). Its absence was a latent break in v0.1.0: `capa install &&
+# capa --check main.capa` on a clean checkout failed at `import
+# capa_hash.hmac` inside vendor/capa_jwt/jwt.capa.
+#
+# capa_url is capa_server's (strict query and per-path-segment
+# percent-decoding).
+#
+# Both pins are copied from the lockfiles of the packages that actually
+# depend on them, so this repeats their choices rather than making new
+# ones. capa_base64, capa_jwt's other dependency, is already a direct
+# dependency above and needs no second entry.
+[dependencies.capa_hash]
+git = "https://github.com/nelsonduarte/capa_hash"
+tag = "v0.1.2"
+verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[dependencies.capa_url]
+git = "https://github.com/nelsonduarte/capa_url"
 tag = "v0.1.0"
 verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
 

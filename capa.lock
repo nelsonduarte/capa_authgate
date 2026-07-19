@@ -26,6 +26,30 @@ commit = "dc90c42f6cc2e72a432076881b1f62480ca9fc58"
 signing_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
 
 [[dependencies]]
+name = "capa_server"
+git = "https://github.com/nelsonduarte/capa_server"
+pin = "v0.1.0"
+pin_kind = "tag"
+commit = "d7c24b10cbc9e76077ed1f810dcf344f3b5fb494"
+signing_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[[dependencies]]
+name = "capa_hash"
+git = "https://github.com/nelsonduarte/capa_hash"
+pin = "v0.1.2"
+pin_kind = "tag"
+commit = "449488a0064178b62aa79216419a626d03ca1929"
+signing_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[[dependencies]]
+name = "capa_url"
+git = "https://github.com/nelsonduarte/capa_url"
+pin = "v0.1.0"
+pin_kind = "tag"
+commit = "511f39a0b465e414d61e9923de75c7cf34b30816"
+signing_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
+
+[[dependencies]]
 name = "capa_test"
 git = "https://github.com/nelsonduarte/capa_test"
 pin = "v0.1.0"
