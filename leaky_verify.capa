@@ -20,7 +20,7 @@
 // a function parameter from `main`; this "pure" verifier was handed
 // nothing, so it has no Net to use and cannot forge one.
 //
-// Exact rejection diagnostic (re-verified on capa 1.18.0; the wording
+// Exact rejection diagnostic (re-verified on capa 1.18.1; the wording
 // is unchanged since 1.16.0):
 //
 //     leaky_verify.capa:61:15: error: capability 'Net' cannot be constructed

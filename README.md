@@ -349,7 +349,7 @@ leaky_verify.capa:61:15: error: capability 'Net' cannot be constructed at a call
 leaky_verify.capa: 1 error
 ```
 
-(Verbatim on capa 1.18.0; the wording is unchanged since 1.16.0.)
+(Verbatim on capa 1.18.1; the wording is unchanged since 1.16.0.)
 
 A capability has no constructor. The only way to reach the network would
 be to *declare* `net: Net`, and then `capa --manifest` would report a
@@ -397,14 +397,23 @@ leak is legal code.
 
 ## Building
 
-**Requires a released `capa` 1.18.0 or newer**, which is what
-`capa.toml` declares as `capa = ">=1.18.0"`. The compiler does not read
-that field, so it is stated here too rather than left implicit. Two
+**Requires a released `capa` 1.18.1 or newer**, which is what
+`capa.toml` declares as `capa = ">=1.18.1"`. The compiler does not read
+that field, so it is stated here too rather than left implicit. Three
 things put the floor where it is: `Serve`, which `service.capa` needs,
-shipped in 1.17.0; and 1.18.0 is the first release whose binaries carry
-a SLSA provenance attestation, which the release guard verifies before
-it builds this package with them. Every release of this repository is
+shipped in 1.17.0; 1.18.0 is the first release whose binaries carry a
+SLSA provenance attestation, which the release guard verifies before it
+builds this package with them; and 1.18.1 is the first whose binary can
+run `capa test` at all, since before it the frozen binary could not
+spawn its own test subprocesses. Every release of this repository is
 gated on a clean-room build performed with exactly that floor version.
+
+**The GitHub CLI (`gh`) must be on your PATH.** Every dependency below
+declares a `verify_key`, and as of capa 1.18.1 that is read as a
+statement that the package must be verified, so a missing verifier is
+refused rather than warned about. `CAPA_ALLOW_MISSING_GH=1` installs
+anyway and names every dependency it lets through, which is a decision
+worth taking deliberately rather than by not reading a warning.
 
 ```bash
 capa install                       # six runtime dependencies, plus capa_test

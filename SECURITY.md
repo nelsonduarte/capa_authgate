@@ -50,7 +50,7 @@ gpg --fingerprint nelson.duarte31@gmail.com
 ```bash
 git clone https://github.com/nelsonduarte/capa_authgate
 cd capa_authgate
-git verify-tag v0.2.2
+git verify-tag v0.2.3
 # Look for: "Good signature from "Nelson Duarte <...>" [ultimate]"
 # and the fingerprint above.
 ```
@@ -70,15 +70,25 @@ build. Their pins are copied from the lockfiles of the packages that
 depend on them, so the supply-chain check applies to them on exactly the
 same terms as the rest, rather than their being resolved by accident
 from whatever happened to sit next to the repository on disk. That
-accident is what v0.1.0 relied on for `capa_hash`, and capa 1.18.0, the
-floor this package declares, removed the resolver fallback that made it
-possible.
+accident is what v0.1.0 relied on for `capa_hash`, and capa 1.18.0
+removed the resolver fallback that made it possible. This package's
+floor is 1.18.1, so no compiler it declares support for still has it.
 
 `capa install` runs the full three-layer supply-chain check on each:
 the `capa.lock` commit SHA, the GPG tag signature (`git verify-tag`
 against your keyring), and the SLSA L2 build provenance. It refuses to
 install when a signature is absent, invalid, or from a different key.
 The pinned commit SHAs are recorded in [`capa.lock`](./capa.lock).
+
+The SLSA layer needs the `gh` CLI. Because every dependency here
+declares a `verify_key`, capa 1.18.1 and later **refuse** the install
+when `gh` is absent rather than warning once per dependency and
+continuing; `CAPA_ALLOW_MISSING_GH=1` is the escape and names every
+dependency it lets through. Note what that does and does not cover: a
+missing verifier is now fail-closed, but an `gh` that is present and
+merely unauthenticated still degrades to a warning, because that path
+is governed by `verify_provenance` (default `warn`). If you need the
+provenance layer to be mandatory, set `CAPA_REQUIRE_PROVENANCE=1`.
 
 ## The capability posture is the security posture
 
