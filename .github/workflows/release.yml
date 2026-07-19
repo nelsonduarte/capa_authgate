@@ -60,7 +60,7 @@ jobs:
     # here: check that the SHA is an ancestor of that repository's main
     # and that the blob of release-guards.yml at that SHA is the blob you
     # audited, then read the diff.
-    uses: nelsonduarte/capa-language/.github/workflows/release-guards.yml@58cf1bf8ed9612dadc277485b2c8be4ff33445ef
+    uses: nelsonduarte/capa-language/.github/workflows/release-guards.yml@2db00705e05b1774cf41eb58006e6533cfca4d55
     permissions:
       # The guards READ. They must never be able to publish, and above
       # all must not hold `id-token: write`: that token signs
@@ -93,6 +93,34 @@ jobs:
         capa --check-capabilities main.capa
         capa --check-capabilities service.capa
         capa test
+
+      # THE DIGESTS OF THE GUARD SCRIPTS, and the one reason worth
+      # passing them. The input's own description says it buys little
+      # once you have pinned a commit SHA, and for its stated purpose
+      # that is right: a SHA is content-addressed, so the scripts cannot
+      # change under a pin like ours the way they could under @main.
+      #
+      # It is passed anyway, for a different property it happens to
+      # give. The guard scripts are fetched at run time by a ref taken
+      # from `job.workflow_sha`, and today's failure was precisely a
+      # context property not meaning what it was assumed to mean. That
+      # variable being EMPTY is caught by the guards. That variable being
+      # populated with a plausible but WRONG revision is caught by
+      # nothing, and it would silently run some other revision's scripts.
+      # These digests are the one input in the whole flow written in THIS
+      # repository, so they are what would notice.
+      #
+      # They are the same bytes recorded in .github/guard-pins.sha256,
+      # which audits the pin ahead of time from here; this checks what
+      # the runner actually fetched. tests/test_release_wiring.sh fails
+      # if the two records ever disagree, because two copies of a digest
+      # list is exactly the drift this pilot keeps finding.
+      guard-digests: |
+        4bee86b2951bd33d3cb8bab6721b2abb30f0533a010dfe93d36ebb275497f1d4  .github/workflows/release-guards.yml
+        420290eb75a96f49aed937be40a3d63d1e2db3aba2de4a4a87c9282eb2a13b38  tools/check_tag_version.sh
+        537a7e902540efe4fe5c8f4ae72788b2f3595696b8a7a4bb0a54e19fe523ffcd  tools/clean_room_build.sh
+        212b06bb4be0100267fcc98bb2be7f99f4860007f51ae222ed359cddb638eaa2  tools/capa_floor.sh
+        4fa535d216ecbd647444c80e4cab978ff8e636e1d5edb437842ee561b9f17e0f  tools/verify_guard_digests.sh
 
   release:
     needs: guards
