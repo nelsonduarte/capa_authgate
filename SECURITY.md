@@ -50,7 +50,7 @@ gpg --fingerprint nelson.duarte31@gmail.com
 ```bash
 git clone https://github.com/nelsonduarte/capa_authgate
 cd capa_authgate
-git verify-tag v0.1.0
+git verify-tag v0.2.1
 # Look for: "Good signature from "Nelson Duarte <...>" [ultimate]"
 # and the fingerprint above.
 ```

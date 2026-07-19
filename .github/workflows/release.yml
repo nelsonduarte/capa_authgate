@@ -62,6 +62,15 @@ jobs:
             exit 1
           fi
 
+      # Runs BEFORE the tarball is built, attested or published: a
+      # mismatch caught after publication is a mismatch that shipped.
+      # v0.2.0 was released with capa.toml still saying 0.1.0 because
+      # nothing here compared the two. The script fails closed on every
+      # way of not knowing (see tools/check_tag_version.sh) and is
+      # runnable locally, so the guard CI runs is the guard you can test.
+      - name: Verify tag matches the manifest version
+        run: bash tools/check_tag_version.sh "${GITHUB_REF_NAME}" capa.toml
+
       - name: Build source tarball
         id: tarball
         run: |

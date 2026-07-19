@@ -43,7 +43,7 @@
 
 [package]
 name = "capa_authgate"
-version = "0.1.0"
+version = "0.2.1"
 capa = ">=1.17.0"
 
 # THE PRODUCT CEILING. A ceiling is usually reached for by a library,
