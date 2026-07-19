@@ -4,8 +4,10 @@
 # which is what the "byte-identical on both backends" claim needs.
 * text=auto eol=lf
 
-# tools/ holds developer helpers: the README manifest-table generator
-# and the vendor-nesting workaround for `--check-capabilities`. Neither
-# is part of the distributed application, so they stay out of the
-# release tarball.
-tools/ export-ignore
+# NOTHING is export-ignored. tools/ used to be, on the reasoning that it
+# holds developer helpers rather than application code, but that made the
+# release tarball contradict its own README: the documented build step is
+# `python tools/nest_vendor.py`, without which `--check-capabilities`
+# fails closed on a layout question, and the tarball did not carry the
+# script. A verification step that only the development tree can run is
+# not a verification step, so tools/ ships.
