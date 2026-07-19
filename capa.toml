@@ -104,10 +104,13 @@ verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
 # THE TWO DEPENDENCIES-OF-DEPENDENCIES, declared here because `capa
 # install` does not resolve dependencies transitively: it reads the ROOT
 # manifest only and never opens a vendored package's capa.toml. A
-# dependency's own dependencies are therefore never fetched, and the
-# build only appears to work on a machine that happens to have a sibling
-# checkout of the missing package next to this repository, which the
-# module resolver falls back to.
+# dependency's own dependencies are therefore never fetched. Before
+# 1.18.0 the build then only APPEARED to work on a machine that happened
+# to have a sibling checkout of the missing package next to this
+# repository, because the module resolver fell back to the project
+# root's parent. capa 1.18.0 removed that fallback, so the same omission
+# now fails loudly instead of silently linking unverified sources; the
+# entries below were required either way.
 #
 # capa_hash is capa_jwt's (HMAC-SHA256 plus the constant-time tag
 # compare). Its absence was a latent break in v0.1.0: `capa install &&

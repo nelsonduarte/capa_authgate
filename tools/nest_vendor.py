@@ -3,7 +3,7 @@
 `capa --check-capabilities` expects.
 
 WHY THIS EXISTS. Two parts of the toolchain disagree about where a
-dependency's own dependencies live, as of capa 1.17.0:
+dependency's own dependencies live, as of capa 1.18.0:
 
   * `capa install` reads the ROOT capa.toml only and never opens a
     vendored package's manifest, so it vendors FLAT: every package,

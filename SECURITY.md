@@ -69,8 +69,10 @@ explicit entries neither is ever fetched, and a clean checkout fails to
 build. Their pins are copied from the lockfiles of the packages that
 depend on them, so the supply-chain check applies to them on exactly the
 same terms as the rest, rather than their being resolved by accident
-from whatever happens to sit next to the repository on disk. That
-accident is what v0.1.0 relied on for `capa_hash`.
+from whatever happened to sit next to the repository on disk. That
+accident is what v0.1.0 relied on for `capa_hash`, and capa 1.18.0, the
+floor this package declares, removed the resolver fallback that made it
+possible.
 
 `capa install` runs the full three-layer supply-chain check on each:
 the `capa.lock` commit SHA, the GPG tag signature (`git verify-tag`
@@ -108,7 +110,7 @@ compiler rejects it, because a capability has no constructor and only
 flows in through a function parameter (`capa --check leaky_verify.capa`):
 
 ```
-leaky_verify.capa:56:15: error: capability 'Net' cannot be constructed at a call site; capabilities only flow through function parameters (declare net: Net on this function and let the caller pass it in). Constructing a capability locally would let any function silently obtain authority it never declared.
+leaky_verify.capa:61:15: error: capability 'Net' cannot be constructed at a call site; capabilities only flow through function parameters (declare net: Net on this function and let the caller pass it in). Constructing a capability locally would let any function silently obtain authority it never declared.
 ```
 
 The only way to reach the network would be to *declare* `net: Net` as a
