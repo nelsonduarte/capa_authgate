@@ -397,6 +397,15 @@ leak is legal code.
 
 ## Building
 
+**Requires a released `capa` 1.18.0 or newer**, which is what
+`capa.toml` declares as `capa = ">=1.18.0"`. The compiler does not read
+that field, so it is stated here too rather than left implicit. Two
+things put the floor where it is: `Serve`, which `service.capa` needs,
+shipped in 1.17.0; and 1.18.0 is the first release whose binaries carry
+a SLSA provenance attestation, which the release guard verifies before
+it builds this package with them. Every release of this repository is
+gated on a clean-room build performed with exactly that floor version.
+
 ```bash
 capa install                       # six runtime dependencies, plus capa_test
 python tools/nest_vendor.py        # only needed for --check-capabilities

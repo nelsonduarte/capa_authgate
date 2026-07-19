@@ -39,12 +39,20 @@
 # auditable Capa source rather than in the trusted runtime, and its own
 # [capabilities] ceiling is max = ["Serve"].
 #
-# `Serve` shipped in capa 1.17.0, which is why the floor moved.
+# `Serve` shipped in capa 1.17.0, which is what first moved the floor.
+# The floor now says 1.18.0, for a second and independent reason: 1.18.0
+# is the first capa release whose binaries carry a SLSA provenance
+# attestation, and the clean-room release guard verifies the compiler it
+# downloads before it builds anything with it. Against 1.17.0 that check
+# has nothing to verify and fails closed, so 1.18.0 is the oldest
+# compiler this package can honestly claim to be buildable with. The
+# field is documentation, not enforcement: the compiler does not read
+# it, so the guard is what makes it true.
 
 [package]
 name = "capa_authgate"
-version = "0.2.1"
-capa = ">=1.17.0"
+version = "0.2.2"
+capa = ">=1.18.0"
 
 # THE PRODUCT CEILING. A ceiling is usually reached for by a library,
 # to bound what a consumer inherits. It is worth at least as much to an

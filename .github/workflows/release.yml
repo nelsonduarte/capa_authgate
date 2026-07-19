@@ -138,7 +138,10 @@ jobs:
       # point, which is all the ordering ever required. The local
       # tools/check_tag_version.sh remains only so the guard is runnable
       # and testable offline (tests/test_check_tag_version.sh); the copy
-      # CI enforces is the pinned one.
+      # CI enforces is the pinned one. It is held BYTE-IDENTICAL to that
+      # pinned copy by tests/test_guard_drift.sh, which compares it
+      # against the SHA pinned above, because a second copy of a security
+      # guard that is allowed to drift still reports success.
 
       - name: Build source tarball
         id: tarball
