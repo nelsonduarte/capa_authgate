@@ -188,6 +188,57 @@ check "the guards job does not take id-token" \
 check "the release job compares its tarball to the digest the guards verified" \
   'printf "%s" "${RELEASE}" | grep -qF "needs.guards.outputs.tarball-sha256"'
 
+# --- the rehearsal predicts the release ---------------------------------
+
+# guard-selftest.yml exists so the plumbing can be exercised on demand
+# instead of one data point per tag. It is only worth having if it
+# rehearses the SAME thing the release runs: a self-test pinned to a
+# different guard revision, or handed a different consumer flow, reports
+# success about a pipeline that is not the one which will publish.
+
+SELFTEST="${REPO_ROOT}/.github/workflows/guard-selftest.yml"
+
+if [ ! -f "${SELFTEST}" ]; then
+  no "a dispatchable guard self-test exists (guard-selftest.yml)"
+else
+  ok "a dispatchable guard self-test exists (guard-selftest.yml)"
+
+  SELF_USES="$(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "${SELFTEST}" \
+    | grep -F "${GUARD_REPO}/${GUARD_PATH}@" || true)"
+  SELF_PIN="${SELF_USES##*@}"
+
+  check "the self-test pins the SAME guard revision as the release (got '${SELF_PIN}')" \
+    '[ -n "${SELF_PIN}" ] && [ "${SELF_PIN}" = "${PIN}" ]'
+
+  # The commands are the whole substance of guard 2. Compared as a set
+  # of non-blank, non-comment lines, so indentation cannot make two
+  # identical flows look different.
+  self_commands() {
+    awk '
+      /^[[:space:]]*consumer-commands:[[:space:]]*\|/ { in_cmds = 1; next }
+      in_cmds && /^[[:space:]]{0,8}[a-zA-Z_-]+:/ { in_cmds = 0 }
+      in_cmds { print }
+    ' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -vE '^(#.*)?$'
+  }
+
+  check "the self-test runs the same consumer flow as the release" \
+    '[ "$(self_commands "${SELFTEST}")" = "$(self_commands "${WORKFLOW}")" ]'
+
+  # A rehearsal that can publish is not a rehearsal. It must hold no
+  # write scope at all, and above all no id-token, which is the token
+  # that signs attestations.
+  check "the self-test grants no write permission anywhere" \
+    '! grep -qE "^[[:space:]]*[a-z-]+:[[:space:]]*write[[:space:]]*$" "${SELFTEST}"'
+
+  check "the self-test never takes id-token" \
+    '! grep -qE "^[[:space:]]*id-token:" "${SELFTEST}"'
+
+  # It must not be reachable from a tag push, or it becomes a second
+  # release path with none of the release path's checks.
+  check "the self-test is dispatch-only" \
+    'grep -qE "^[[:space:]]*workflow_dispatch:" "${SELFTEST}" && ! grep -qE "^[[:space:]]*(push|release):" "${SELFTEST}"'
+fi
+
 # --- does the pin actually exist (network) ------------------------------
 
 if ! command -v gh >/dev/null 2>&1; then
