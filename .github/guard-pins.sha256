@@ -1,0 +1,55 @@
+# THE GUARD REVISION THIS REPOSITORY AUDITED, BY CONTENT.
+#
+# release.yml pins the shared release guards by commit SHA. A SHA is
+# content-addressed and therefore immutable, so the pin cannot be edited
+# under us. What a SHA does NOT do is tell a reader what is in it, and
+# what nothing did until this file existed was state which BYTES we
+# looked at before pinning them.
+#
+# Why that gap mattered. The guards prove which revision of themselves
+# they run by reading a value the platform hands them and then checking
+# that `actions/checkout` fetched that same value. Those two are the
+# same number, so the check establishes internal consistency and not
+# provenance: hand it the wrong revision and it agrees with itself. The
+# question "did the pinned revision run" was answered by a variable
+# rather than by anything observable about the files, and when the
+# pinned revision and `main` happened to be byte-identical there was
+# nothing observable to tell them apart at all.
+#
+# This file closes that from the CALLER's side, where it can be closed
+# without trusting the thing being checked. Every file the guards
+# execute is recorded here by SHA-256, taken at the pinned revision.
+# tests/test_guard_drift.sh re-fetches each one and refuses any
+# difference, so:
+#
+#   * bumping the pin without re-auditing goes RED, because the digests
+#     below describe a revision the workflow no longer names;
+#   * a pin that resolves to bytes other than the audited ones goes RED,
+#     which is the falsifiable form of "we ran what we pinned";
+#   * the check runs offline of any claim the guards make about
+#     themselves, before a tag is ever pushed.
+#
+# WHAT REMAINS TRUSTED, stated plainly rather than papered over: that
+# GitHub runs the workflow file living at the pinned SHA. A workflow
+# cannot establish its own identity from inside itself, because a
+# substituted file could simply print the expected answer. That is the
+# platform's guarantee and the reason `uses:@<sha>` is written by SHA.
+# Everything downstream of it is checked here by content.
+#
+# TO RE-AUDIT AFTER A PIN BUMP: read the diff between the old and new
+# revisions, then regenerate with
+#
+#   PIN=<new-sha>; for f in <the paths below>; do
+#     gh api "repos/nelsonduarte/capa-language/contents/$f?ref=$PIN" \
+#       --jq .content | base64 -d | sha256sum
+#   done
+#
+# and record the new SHA on the `revision` line. Regenerating without
+# reading the diff defeats the purpose of the exercise.
+
+revision 58cf1bf8ed9612dadc277485b2c8be4ff33445ef
+
+a8438e63ca91f210888dc462486c6b7b6037856e3e929c6299a70efb416c2a60  .github/workflows/release-guards.yml
+420290eb75a96f49aed937be40a3d63d1e2db3aba2de4a4a87c9282eb2a13b38  tools/check_tag_version.sh
+537a7e902540efe4fe5c8f4ae72788b2f3595696b8a7a4bb0a54e19fe523ffcd  tools/clean_room_build.sh
+212b06bb4be0100267fcc98bb2be7f99f4860007f51ae222ed359cddb638eaa2  tools/capa_floor.sh

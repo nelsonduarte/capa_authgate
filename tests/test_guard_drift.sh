@@ -102,5 +102,75 @@ else
   fi
 fi
 
+# --- the pin, audited BY CONTENT ---------------------------------------
+#
+# Everything above concerns the one guard file this repository also keeps
+# a runnable copy of. This part covers every file the guards execute, and
+# it exists because "we ran the revision you pinned" was previously
+# established by a value the platform handed the guards rather than by
+# anything observable about the files. Two revisions that are
+# byte-identical are indistinguishable by such a value, and two that are
+# NOT identical are exactly the case that must be caught.
+#
+# So: .github/guard-pins.sha256 records the digest of each guard file at
+# the revision this repository audited, and this refetches and compares.
+# A pin bumped without re-auditing goes red on the revision line; a pin
+# whose bytes are not the audited bytes goes red on a digest. Neither
+# outcome depends on anything the guards say about themselves.
+
+PINS="${REPO_ROOT}/.github/guard-pins.sha256"
+
+if [ ! -f "${PINS}" ]; then
+  no "the audited guard digests are recorded (.github/guard-pins.sha256)"
+else
+  ok "the audited guard digests are recorded (.github/guard-pins.sha256)"
+
+  AUDITED_REV="$(awk '$1 == "revision" { print $2; exit }' "${PINS}")"
+
+  check_rev() {
+    if [ -z "${AUDITED_REV}" ]; then
+      no "guard-pins.sha256 names no revision; it cannot describe anything"
+      return 1
+    fi
+    if [ "${AUDITED_REV}" != "${PIN}" ]; then
+      no "the audited revision is not the pinned one"
+      echo "     release.yml pins        ${PIN}"
+      echo "     guard-pins.sha256 names ${AUDITED_REV}"
+      echo "     re-read the diff between them, then re-record the digests"
+      return 1
+    fi
+    ok "the audited revision is the one release.yml pins"
+    return 0
+  }
+
+  if check_rev; then
+    # One digest line per guard file: "<sha256>  <path>".
+    ENTRIES="$(grep -E '^[0-9a-f]{64}[[:space:]]+[^[:space:]]+' "${PINS}" || true)"
+
+    if [ -z "${ENTRIES}" ]; then
+      no "guard-pins.sha256 records no digests; it would pass having checked nothing"
+    elif ! command -v gh >/dev/null 2>&1; then
+      skip "every guard file matches its audited digest (gh not installed)"
+    elif ! gh auth status >/dev/null 2>&1; then
+      skip "every guard file matches its audited digest (gh not authenticated)"
+    else
+      while read -r want path; do
+        [ -z "${path}" ] && continue
+        got="$(gh api "repos/${GUARD_REPO}/contents/${path}?ref=${PIN}" \
+                 --jq .content 2>/dev/null | base64 -d | sha256sum | cut -d' ' -f1)"
+        if [ -z "${got}" ]; then
+          no "${path} could not be fetched at ${PIN}; the pin may not carry it"
+        elif [ "${got}" = "${want}" ]; then
+          ok "${path} matches its audited digest"
+        else
+          no "${path} at ${PIN} is NOT the audited file"
+          echo "     audited ${want}"
+          echo "     fetched ${got}"
+        fi
+      done <<< "${ENTRIES}"
+    fi
+  fi
+fi
+
 printf '\n%s passed, %s failed, %s skipped\n' "${PASS}" "${FAIL}" "${SKIP}"
 [ "${FAIL}" = "0" ]
