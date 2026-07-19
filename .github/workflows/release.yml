@@ -12,6 +12,20 @@ name: Release
 #
 # That confirms the tarball was built by this repo's CI on a tag
 # matching the SHA recorded in the Rekor entry.
+#
+# THE RELEASE GUARDS RUN FIRST, and they are not defined here. They live
+# in the compiler repository as one reusable workflow, pinned below by
+# commit SHA, and `release` cannot start until they pass. Both of the
+# defects they exist to catch were this repository's:
+#
+#   * v0.1.0 published, signed, attested, CI-green, and did not compile
+#     for anyone who downloaded it, because our ~/Desktop/repos layout
+#     silently satisfied an import the manifest never declared.
+#   * v0.2.0 published with capa.toml still saying version = "0.1.0",
+#     because nothing compared the tag to the manifest.
+#
+# They are pinned by SHA and not by tag because a tag is mutable, and a
+# guard you cannot pin is a guard someone else can edit under you.
 
 on:
   push:
@@ -34,7 +48,54 @@ env:
   PINNED_FPR: "6C1D222D491FB88031E041A536CFB426101AA24B"
 
 jobs:
+  # Guard 1 (tag matches the manifest version) and guard 2 (the artefact
+  # builds in a clean room, from the artefact's own bytes, with a
+  # RELEASED compiler) both run here, before anything is built, attested
+  # or published. A mismatch caught after publication is a mismatch that
+  # shipped, and a tag is not rewritable without destroying the
+  # provenance it anchors.
+  guards:
+    # Pinned to the commit that introduced the reusable workflow in the
+    # compiler repository. Confirm a bump the same way it was confirmed
+    # here: check that the SHA is an ancestor of that repository's main
+    # and that the blob of release-guards.yml at that SHA is the blob you
+    # audited, then read the diff.
+    uses: nelsonduarte/capa-language/.github/workflows/release-guards.yml@58cf1bf8ed9612dadc277485b2c8be4ff33445ef
+    permissions:
+      # The guards READ. They must never be able to publish, and above
+      # all must not hold `id-token: write`: that token signs
+      # attestations, and a guard has no business holding a credential
+      # that can sign anything. Stated explicitly rather than inherited,
+      # because the workflow-level grant above is write-heavy and a job
+      # that says nothing gets all of it.
+      contents: read
+    with:
+      # The CONSUMER flow, exactly as the README tells a downloader to
+      # run it. `gpg --import publisher.asc` comes first because every
+      # dependency in capa.toml carries a verify_key, so without the
+      # publisher key in the keyring `capa install` fails on the first
+      # one. `nest_vendor.py` is needed because `capa install` vendors
+      # flat while the ceiling gate looks for a nested layout; it ships
+      # in the tarball, and the tarball not shipping it is precisely how
+      # v0.2.0's README came to document an unrunnable command.
+      #
+      # BOTH entry points are checked, and both are checked twice: once
+      # for compilation and once for the capability ceiling. The ceiling
+      # is the product's central claim, so a clean room that compiled
+      # the code without testing the claim would be verifying the less
+      # interesting half.
+      consumer-commands: |
+        gpg --import publisher.asc
+        capa install
+        python tools/nest_vendor.py
+        capa --check main.capa
+        capa --check service.capa
+        capa --check-capabilities main.capa
+        capa --check-capabilities service.capa
+        capa test
+
   release:
+    needs: guards
     runs-on: ubuntu-latest
     steps:
       - name: Checkout tag
@@ -71,14 +132,13 @@ jobs:
             exit 1
           fi
 
-      # Runs BEFORE the tarball is built, attested or published: a
-      # mismatch caught after publication is a mismatch that shipped.
-      # v0.2.0 was released with capa.toml still saying 0.1.0 because
-      # nothing here compared the two. The script fails closed on every
-      # way of not knowing (see tools/check_tag_version.sh) and is
-      # runnable locally, so the guard CI runs is the guard you can test.
-      - name: Verify tag matches the manifest version
-        run: bash tools/check_tag_version.sh "${GITHUB_REF_NAME}" capa.toml
+      # The tag/manifest check that used to be an inline step here now
+      # runs in the `guards` job above, from the compiler repository's
+      # single copy. `needs: guards` means it still runs before this
+      # point, which is all the ordering ever required. The local
+      # tools/check_tag_version.sh remains only so the guard is runnable
+      # and testable offline (tests/test_check_tag_version.sh); the copy
+      # CI enforces is the pinned one.
 
       - name: Build source tarball
         id: tarball
@@ -88,6 +148,42 @@ jobs:
           SHA256=$(sha256sum "${NAME}.tar.gz" | cut -d' ' -f1)
           echo "name=${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+      # THE GAP THE GUARDS CANNOT CLOSE THEMSELVES, closed here. Guard 2
+      # must run before publication to be worth anything, so it verifies
+      # a tarball it rebuilt from the tag rather than the bytes this job
+      # is about to upload. It therefore proves the CONTENTS are sound
+      # and says nothing about whether these are those bytes. Only this
+      # job holds the artefact it is about to publish, so only this job
+      # can assert they are the same, and the reusable workflow exports
+      # `tarball-sha256` for exactly that.
+      #
+      # Both digests come from the same `git archive` invocation over the
+      # same tag on the same runner image, so they are expected to be
+      # byte-identical. If they ever are not, this fails the release
+      # BEFORE anything is published, which costs a re-run and no tag
+      # rewrite; the alternative is publishing bytes nothing verified.
+      - name: Confirm the tarball is the one the guards verified
+        env:
+          GUARD_SHA256: ${{ needs.guards.outputs.tarball-sha256 }}
+          BUILT_SHA256: ${{ steps.tarball.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          # Fail closed on an absent digest as well as a differing one: an
+          # empty value means the clean room did not report, and treating
+          # "no answer" as "same answer" is how a guard passes for the
+          # wrong reason.
+          if [ -z "${GUARD_SHA256}" ]; then
+            echo "ERROR: the guards reported no tarball digest; refusing to publish unverified bytes" >&2
+            exit 1
+          fi
+          if [ "${GUARD_SHA256}" != "${BUILT_SHA256}" ]; then
+            echo "ERROR: the tarball about to be published is not the one the guards verified" >&2
+            echo "       guards verified ${GUARD_SHA256}" >&2
+            echo "       this job built  ${BUILT_SHA256}" >&2
+            exit 1
+          fi
+          echo "OK: publishing exactly the bytes the clean room built (${BUILT_SHA256})"
 
       - name: Generate SLSA L2 provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
