@@ -20,15 +20,15 @@
 // a function parameter from `main`; this "pure" verifier was handed
 // nothing, so it has no Net to use and cannot forge one.
 //
-// Exact rejection diagnostic (re-verified on capa 1.17.0; the wording
+// Exact rejection diagnostic (re-verified on capa 1.18.1; the wording
 // is unchanged since 1.16.0):
 //
-//     leaky_verify.capa:56:15: error: capability 'Net' cannot be constructed
+//     leaky_verify.capa:61:15: error: capability 'Net' cannot be constructed
 //     at a call site; capabilities only flow through function parameters
 //     (declare net: Net on this function and let the caller pass it in).
 //     Constructing a capability locally would let any function silently
 //     obtain authority it never declared.
-//        56 |     let net = Net()
+//        61 |     let net = Net()
 //                           ^
 //     leaky_verify.capa: 1 error
 //

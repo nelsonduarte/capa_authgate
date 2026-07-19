@@ -47,7 +47,7 @@ AuthError>` was already the exact shape of a request handler, plain data
 in and a `Result` out, **because the purity discipline had already
 forced the caller to hold the `Clock` and pass `now` in as an `Int`**. A
 verifier that read its own clock would have needed rewriting to be
-served. This one is called the same way from `main.capa:97` (the CLI)
+served. This one is called the same way from `main.capa:98` (the CLI)
 and from `service.capa`'s accept loop, and it holds nothing in either.
 
 ## The capability manifest (the point)
@@ -342,14 +342,14 @@ capa --check leaky_verify.capa
 ```
 
 ```
-leaky_verify.capa:56:15: error: capability 'Net' cannot be constructed at a call site; capabilities only flow through function parameters (declare net: Net on this function and let the caller pass it in). Constructing a capability locally would let any function silently obtain authority it never declared.
-  56 |     let net = Net()
+leaky_verify.capa:61:15: error: capability 'Net' cannot be constructed at a call site; capabilities only flow through function parameters (declare net: Net on this function and let the caller pass it in). Constructing a capability locally would let any function silently obtain authority it never declared.
+  61 |     let net = Net()
                      ^
 
 leaky_verify.capa: 1 error
 ```
 
-(Verbatim on capa 1.17.0; unchanged since 1.16.0.)
+(Verbatim on capa 1.18.1; the wording is unchanged since 1.16.0.)
 
 A capability has no constructor. The only way to reach the network would
 be to *declare* `net: Net`, and then `capa --manifest` would report a
@@ -366,7 +366,7 @@ that, and **it compiles**:
 
 ```bash
 $ capa --check leaky_handler.capa
-leaky_handler.capa:107:66: warning: information-flow: a @secret value is passed
+leaky_handler.capa:119:66: warning: information-flow: a @secret value is passed
 to 'serve_once' as handler, which reaches a public sink inside 'serve_once' (it
 sends data out of the program). ...
 
@@ -397,6 +397,24 @@ leak is legal code.
 
 ## Building
 
+**Requires a released `capa` 1.18.1 or newer**, which is what
+`capa.toml` declares as `capa = ">=1.18.1"`. The compiler does not read
+that field, so it is stated here too rather than left implicit. Three
+things put the floor where it is: `Serve`, which `service.capa` needs,
+shipped in 1.17.0; 1.18.0 is the first release whose binaries carry a
+SLSA provenance attestation, which the release guard verifies before it
+builds this package with them; and 1.18.1 is the first whose binary can
+run `capa test` at all, since before it the frozen binary could not
+spawn its own test subprocesses. Every release of this repository is
+gated on a clean-room build performed with exactly that floor version.
+
+**The GitHub CLI (`gh`) must be on your PATH.** Every dependency below
+declares a `verify_key`, and as of capa 1.18.1 that is read as a
+statement that the package must be verified, so a missing verifier is
+refused rather than warned about. `CAPA_ALLOW_MISSING_GH=1` installs
+anyway and names every dependency it lets through, which is a decision
+worth taking deliberately rather than by not reading a warning.
+
 ```bash
 capa install                       # six runtime dependencies, plus capa_test
 python tools/nest_vendor.py        # only needed for --check-capabilities
@@ -415,7 +433,11 @@ the build fails on a clean checkout at `import capa_hash.hmac` inside
 `vendor/capa_jwt/jwt.capa`. This was a **latent break in v0.1.0**: it
 only appeared to work on a machine that happened to have a sibling
 checkout of `capa_hash` next to this repository, which the module
-resolver falls back to.
+resolver fell back to at the time. **capa 1.18.0 removed that
+fallback**, so an undeclared transitive dependency now fails loudly
+rather than silently resolving against unverified sources next door.
+The entries were required either way; what changed is that forgetting
+them can no longer look like success.
 
 **The ceiling gate expects a nested vendor layout.** `capa install`
 vendors flat (`vendor/<name>` for every package at any depth), while the

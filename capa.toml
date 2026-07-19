@@ -39,12 +39,32 @@
 # auditable Capa source rather than in the trusted runtime, and its own
 # [capabilities] ceiling is max = ["Serve"].
 #
-# `Serve` shipped in capa 1.17.0, which is why the floor moved.
+# THE FLOOR, and the three separate things that put it where it is.
+# Each was found by running the release guard rather than by reasoning
+# about it, which is the argument for the guard.
+#
+#   1.17.0  `Serve` shipped, and service.capa needs it.
+#   1.18.0  first release whose binaries carry a SLSA provenance
+#           attestation. The clean-room guard verifies the compiler it
+#           downloads before building anything with it, and against
+#           1.17.0 that check had nothing to verify and failed closed.
+#   1.18.1  first release whose binary can run `capa test`. Under
+#           PyInstaller the test runner spawned `sys.executable -m capa`,
+#           and a frozen binary is not a Python interpreter, so every
+#           test failed with `unrecognized arguments: -m`. The clean room
+#           runs `capa test`, so a floor of 1.18.0 would name a compiler
+#           that cannot complete the flow this package documents.
+#
+# The floor is therefore 1.18.1: the oldest compiler a consumer can
+# follow the README with end to end. The field is documentation, not
+# enforcement, since the compiler does not read it. The guard is what
+# makes it true, by building this package with exactly the version the
+# floor names.
 
 [package]
 name = "capa_authgate"
-version = "0.2.1"
-capa = ">=1.17.0"
+version = "0.2.3"
+capa = ">=1.18.1"
 
 # THE PRODUCT CEILING. A ceiling is usually reached for by a library,
 # to bound what a consumer inherits. It is worth at least as much to an
@@ -96,10 +116,13 @@ verify_key = "6C1D222D491FB88031E041A536CFB426101AA24B"
 # THE TWO DEPENDENCIES-OF-DEPENDENCIES, declared here because `capa
 # install` does not resolve dependencies transitively: it reads the ROOT
 # manifest only and never opens a vendored package's capa.toml. A
-# dependency's own dependencies are therefore never fetched, and the
-# build only appears to work on a machine that happens to have a sibling
-# checkout of the missing package next to this repository, which the
-# module resolver falls back to.
+# dependency's own dependencies are therefore never fetched. Before
+# 1.18.0 the build then only APPEARED to work on a machine that happened
+# to have a sibling checkout of the missing package next to this
+# repository, because the module resolver fell back to the project
+# root's parent. capa 1.18.0 removed that fallback, so the same omission
+# now fails loudly instead of silently linking unverified sources; the
+# entries below were required either way.
 #
 # capa_hash is capa_jwt's (HMAC-SHA256 plus the constant-time tag
 # compare). Its absence was a latent break in v0.1.0: `capa install &&
