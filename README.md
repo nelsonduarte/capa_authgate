@@ -88,21 +88,44 @@ max = ["Serve", "Env", "Clock", "Stdio", "Random"]
 A ceiling is usually reached for by a *library*, to bound what a
 consumer inherits. **It is worth at least as much to an application**,
 because the application is the thing that actually gets deployed: this
-is the machine-checked statement that neither entry point, and nothing
-anywhere beneath either of them, introduces `Fs`, `Net`, `Db`, `Proc`,
-or `Unsafe`. The set is the exact union of the two front-ends and no
-more.
+is the machine-checked statement that no checked entry point, and
+nothing anywhere beneath any of them, introduces `Fs`, `Net`, `Db` or
+`Proc`. The set is the exact union of the two front-ends and no more.
 
 ```bash
 capa install
 python tools/nest_vendor.py        # see "Building" below; needed once
 capa --check-capabilities service.capa
 capa --check-capabilities main.capa
+capa --check-capabilities authgate.capa
+capa --check-capabilities router.capa
+capa --check-capabilities example.capa
 ```
 
 ```
 capa: --check-capabilities: OK - every declared capability ceiling holds.
 ```
+
+> **The ceiling covers the import closure of the entry point you check,
+> not "the package".** `capa --check-capabilities <entry>` opens that
+> entry and everything it imports, directly or transitively, and
+> nothing else. The operative consequence: **a module that is not an
+> entry point, and is not imported by one, is unchecked.** Measured on
+> the released 1.18.1 against a sibling package with an `Fs`-taking
+> module added at the top level, both configured entries reported `OK`
+> and the violation appeared only when the new module was named on the
+> command line.
+>
+> That is why five modules are listed above and not two. `authgate.capa`
+> and `router.capa` already sit inside the closure of `main.capa` and
+> `service.capa`, but being inside a closure is invisible in a directory
+> listing and stops being true the moment an import is refactored away.
+> The two `leaky_*` counter-examples are the remaining top-level
+> modules, and the release now runs them as **negatives** (see
+> [The counter-examples](#the-counter-examples)). `tests/test_release_wiring.sh`
+> lists the top-level `*.capa` files on disk and fails if the release
+> flow does not account for every one of them, so an eighth module
+> cannot arrive uncovered.
 
 ## The service
 
@@ -332,6 +355,21 @@ is hostile.
 Two files that deliberately do the wrong thing, neither imported by
 anything. They fail in **two different ways**, which is the point.
 
+Because nothing imports them, no other entry point's ceiling check ever
+opens them, so until v0.2.5 both claims below were documentation and
+nothing more: the release ran neither file. It now runs both, as
+negatives, in the clean room against a released compiler, and each is
+required to fail **for the stated reason** rather than merely to fail:
+
+```bash
+capa --check-capabilities leaky_handler.capa 2>&1 | grep -q 'ceiling violation'
+capa --check leaky_verify.capa 2>&1 | grep -q "capability 'Net' cannot be constructed"
+```
+
+A renamed file, an unrelated syntax error, or a ceiling that quietly
+starts accepting `leaky_handler.capa` all fail the release, because
+`grep` cannot succeed unless the expected message appeared.
+
 ### `leaky_verify.capa` - the compiler refuses
 
 A copy of the verify path that tries to POST the token to an attacker
@@ -389,6 +427,12 @@ gate composes from the entry point it is given. The authority could not
 hide in the closure, because it could not get *into* the closure without
 `main` declaring it, and `main`'s declaration is the package's
 authority.
+
+That last sentence is also the general rule, and it cuts both ways: the
+gate composing **from the entry point it is given** is exactly why an
+unimported module is invisible to it. `leaky_handler.capa` is refused
+only because the release names it; it would sail through a flow that
+checked `main.capa` and `service.capa` alone.
 
 So: **a type-level guarantee** that a pure function cannot obtain
 authority, and **a product-level gate** that refuses a program asking

@@ -63,15 +63,16 @@
 
 [package]
 name = "capa_authgate"
-version = "0.2.4"
+version = "0.2.5"
 capa = ">=1.18.1"
 
 # THE PRODUCT CEILING. A ceiling is usually reached for by a library,
 # to bound what a consumer inherits. It is worth at least as much to an
 # APPLICATION, because an application is the thing that actually gets
-# deployed: this is the machine-checked statement that no entry point,
-# and nothing anywhere in the dependency tree beneath either of them,
-# can read a file, dial out, spawn a process, or reach a database.
+# deployed: this is the machine-checked statement that no entry point
+# the release checks, and nothing anywhere in the dependency tree
+# beneath any of them, can read a file, dial out, spawn a process, or
+# reach a database.
 #
 # The set is the exact union of the two front-ends, and no more:
 #
@@ -81,8 +82,28 @@ capa = ">=1.18.1"
 #   Stdio  the CLI's output
 #   Random the minter's v7 UUID token id
 #
-# Absent, and therefore proven absent across the whole product: Fs,
-# Net, Db, Proc, Unsafe.
+# Absent, and therefore proven absent across every checked entry point:
+# Fs, Net, Db and Proc. (`Unsafe` is not a name capa accepts in this
+# table at all; its allowed list is Clock, Db, Env, Fs, Net, Proc,
+# Random, Serve, Stdio.)
+#
+# WHAT "ACROSS THE PRODUCT" MEANS, PRECISELY, because the previous
+# wording overstated it. `capa --check-capabilities <entry>` covers the
+# IMPORT CLOSURE OF THE ENTRY IT IS GIVEN, not the package. A module
+# that is not the entry and is not imported by it, directly or
+# transitively, is never opened, and the command exits 0 having never
+# seen it. Measured on the released 1.18.1 against a sibling package
+# with an `Fs`-taking module added at the top level: both configured
+# entries reported OK, and the violation appeared only when the new
+# module was named on the command line.
+#
+# THE OPERATIVE CONSEQUENCE: a module that is not an entry point and is
+# not imported by one is UNCHECKED. This repository has seven top-level
+# modules and the release used to check two. It now checks five and
+# demonstrates the other two as deliberate NEGATIVES, and
+# tests/test_release_wiring.sh reads the top-level `*.capa` files off
+# disk and fails if the flow does not account for every one of them, so
+# an eighth module cannot arrive uncovered.
 #
 # Verify with `capa --check-capabilities service.capa`. See the README
 # for the one extra step that is needed first: the gate looks for a

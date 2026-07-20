@@ -133,7 +133,7 @@ counter-example for the service, and it fails differently. A request
 handler is a closure, and Capa lets a closure capture a capability, so
 authority can ride into a handler whose type (`Fun(Request) ->
 Response`) says it is inert. That file **compiles**. What refuses it is
-the package ceiling:
+the ceiling, when the ceiling is handed that file by name:
 
 ```
 capa: --check-capabilities: FAILED - 1 ceiling violation(s):
@@ -145,6 +145,18 @@ it, and `main`'s declaration is the package's authority. Do not read the
 information-flow warning that file also emits as the check that caught
 it; that warning fires on `service.capa` too, for the innocent reason
 that its handler captures the HMAC key.
+
+**What the ceiling covers, exactly.** `capa --check-capabilities
+<entry>` covers the import closure of the entry it is given, not the
+package: a module that is not an entry point and is not imported by one
+is never opened, and the command exits 0 having never seen it. Nothing
+imports either `leaky_*` file, so both were invisible to a release that
+checked `main.capa` and `service.capa` alone, and both claims above were
+documentation rather than evidence. The release now names all five real
+modules and runs the two counter-examples as negatives that must fail
+with the message quoted above; `tests/test_release_wiring.sh` reads the
+top-level `*.capa` files off disk and fails if the flow does not account
+for every one of them.
 
 ## Reporting a vulnerability
 

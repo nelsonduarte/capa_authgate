@@ -73,8 +73,16 @@ jobs:
         python tools/nest_vendor.py
         capa --check main.capa
         capa --check service.capa
+        capa --check authgate.capa
+        capa --check router.capa
+        capa --check example.capa
         capa --check-capabilities main.capa
         capa --check-capabilities service.capa
+        capa --check-capabilities authgate.capa
+        capa --check-capabilities router.capa
+        capa --check-capabilities example.capa
+        capa --check-capabilities leaky_handler.capa 2>&1 | grep -q 'ceiling violation'
+        capa --check leaky_verify.capa 2>&1 | grep -q "capability 'Net' cannot be constructed"
         capa test
 
       # The same digests release.yml passes, for the same reason, and
