@@ -79,19 +79,55 @@ jobs:
       # in the tarball, and the tarball not shipping it is precisely how
       # v0.2.0's README came to document an unrunnable command.
       #
-      # BOTH entry points are checked, and both are checked twice: once
-      # for compilation and once for the capability ceiling. The ceiling
-      # is the product's central claim, so a clean room that compiled
-      # the code without testing the claim would be verifying the less
-      # interesting half.
+      # EVERY top-level module is checked, and each is checked twice:
+      # once for compilation and once for the capability ceiling. The
+      # ceiling is the product's central claim, so a clean room that
+      # compiled the code without testing the claim would be verifying
+      # the less interesting half.
+      #
+      # WHY THE LIST GREW FROM TWO MODULES TO FIVE. It was two, and
+      # that was believed to bound the product, because capa.toml said
+      # a ceiling is "a property of the package". It is not.
+      # `capa --check-capabilities <entry>` covers the IMPORT CLOSURE OF
+      # THAT ENTRY and nothing else: a module no checked entry imports
+      # is never opened, and the command exits 0 having never seen it.
+      # Measured on the released 1.18.1 against a sibling package with
+      # an `Fs`-taking module added at the top level, the check passed
+      # for both configured entries and failed only when handed the new
+      # module by name.
+      #
+      # So coverage here is exactly the set of names below, and
+      # authgate.capa and router.capa are named even though both already
+      # lie inside the closure of main.capa and service.capa. Being
+      # inside a closure is invisible in a directory listing and stops
+      # being true the moment an import is refactored away.
+      # tests/test_release_wiring.sh reads the top-level `*.capa` files
+      # off disk and fails if this list does not account for all of
+      # them, so the two cannot silently diverge.
+      #
+      # THE LAST TWO LINES BEFORE `capa test` ARE NEGATIVES, and they
+      # are the reason the README's counter-examples are now evidence
+      # rather than assertion. Each requires the command to fail FOR THE
+      # STATED REASON: `grep -q` over the combined output cannot pass
+      # unless the expected message appeared, so a renamed file, an
+      # unrelated syntax error, or a ceiling that quietly starts
+      # accepting leaky_handler.capa all fail the release.
       consumer-commands: |
         gpg --import publisher.asc
         capa install
         python tools/nest_vendor.py
         capa --check main.capa
         capa --check service.capa
+        capa --check authgate.capa
+        capa --check router.capa
+        capa --check example.capa
         capa --check-capabilities main.capa
         capa --check-capabilities service.capa
+        capa --check-capabilities authgate.capa
+        capa --check-capabilities router.capa
+        capa --check-capabilities example.capa
+        capa --check-capabilities leaky_handler.capa 2>&1 | grep -q 'ceiling violation'
+        capa --check leaky_verify.capa 2>&1 | grep -q "capability 'Net' cannot be constructed"
         capa test
 
       # THE DIGESTS OF THE GUARD SCRIPTS, and the one reason worth
