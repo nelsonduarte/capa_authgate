@@ -199,13 +199,20 @@ jobs:
       # The tag/manifest check that used to be an inline step here now
       # runs in the `guards` job above, from the compiler repository's
       # single copy. `needs: guards` means it still runs before this
-      # point, which is all the ordering ever required. The local
-      # tools/check_tag_version.sh remains only so the guard is runnable
-      # and testable offline (tests/test_check_tag_version.sh); the copy
-      # CI enforces is the pinned one. It is held BYTE-IDENTICAL to that
-      # pinned copy by tests/test_guard_drift.sh, which compares it
-      # against the SHA pinned above, because a second copy of a security
-      # guard that is allowed to drift still reports success.
+      # point, which is all the ordering ever required.
+      #
+      # THIS REPOSITORY NO LONGER KEEPS A COPY OF THAT GUARD. It used to
+      # hold tools/check_tag_version.sh byte-identical to the pinned
+      # one, so the guard could be rehearsed offline, with
+      # tests/test_guard_drift.sh holding the two together. That was a
+      # second copy of a security control in a fleet whose whole drift
+      # apparatus exists because copies drift, and it had ALREADY
+      # drifted once: it was forked before the shared guard gained its
+      # third argument, so the two accepted different arguments and
+      # printed different messages while looking interchangeable. The
+      # guard is now tested once, in the compiler repository, against
+      # the file this job actually runs. The pin above is audited by
+      # content in tests/test_guard_pins.sh.
 
       - name: Build source tarball
         id: tarball
