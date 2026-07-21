@@ -65,7 +65,7 @@
 # Updating the digests without re-copying is how a local edit becomes a
 # permanent fork with a green test over it.
 
-revision d167b98e9dc77c3af2acf597d19c675cf12f2960
+revision ddf452e2a0741a9f559aa4f5e30302d5ae9dfc52
 
 16364eedf7bb6380c6d4156139acceec80dad0ae6f5cae5bfae3f67b3dbeee85  tests/test_release_wiring.sh
 f703c855c94cd5cec4e6502258c307cc5f3f0747b8b12ca906c6890727c2a745  tests/test_wiring_mutations.sh
