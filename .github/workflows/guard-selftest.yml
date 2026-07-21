@@ -60,7 +60,7 @@ jobs:
     # the one that will actually gate the release is not a rehearsal, it
     # is a second thing to keep in sync, and it would report success for
     # the wrong reason.
-    uses: nelsonduarte/capa-language/.github/workflows/release-guards.yml@2db00705e05b1774cf41eb58006e6533cfca4d55
+    uses: nelsonduarte/capa-language/.github/workflows/release-guards.yml@d167b98e9dc77c3af2acf597d19c675cf12f2960
     permissions:
       contents: read
     with:
@@ -109,7 +109,7 @@ jobs:
       contents: read
     steps:
       - name: Check out the tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag }}
